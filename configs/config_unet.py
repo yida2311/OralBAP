@@ -54,7 +54,7 @@ class Config:
         self.lr = 1e-4
         self.num_epochs = 120
         self.warmup_epochs = 2
-        self.batch_size = 4
+        self.batch_size = 1
         self.acc_step = 4
         self.ckpt_path = None # pretrained model
         self.num_workers = 4
@@ -91,3 +91,7 @@ class Config:
         self.coarse_output_path = out_root + "corse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
+        # test cfg
+        self.testset_cfg = self.fineset_cfg
+        self.test_output_path = out_root + "test predictions/" + self.task_name 
+

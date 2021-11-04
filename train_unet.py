@@ -7,10 +7,7 @@ import joblib
 import torch
 from torch import nn
 import torch.nn.functional as F
-from omegaconf import OmegaConf
 import numpy as np 
-from PIL import Image
-from torch.utils.data.sampler import BatchSampler
 from tqdm import tqdm
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
@@ -111,7 +108,7 @@ def main(cfg, device, local_rank=0):
     # loss_cfg = cfg.loss_cfg[cfg.loss]
     if cfg.loss == "ce":
         criterion = nn.CrossEntropyLoss(reduction='mean')
-    ### SOLOVER
+    ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
     num_epochs = cfg.num_epochs
     learning_rate = cfg.lr
