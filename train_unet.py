@@ -216,14 +216,12 @@ def main(cfg, device, local_rank=0):
                 # Fine
                 print("evaluating fine...")
                 num_slides = len(dataset_fine.slides)
-                tbar3 = tqdm(range(11,num_slides))
+                tbar3 = tqdm(range(num_slides))
                 start_time = time.time()
                 for i in tbar3:
                     dataset_fine.get_patches_from_index(i)
                     pred, _, _ = evaluator.inference(dataset_fine, model)
                     label = dataset_fine.get_slide_mask_from_index(i)
-                    print(dataset_fine.slide)
-                    print(label.shape, pred.shape)
                     evaluator.update_scores(label, pred)
                     scores_fine = evaluator.get_scores()
                     batch_time.update(time.time()-start_time)
@@ -240,7 +238,7 @@ def main(cfg, device, local_rank=0):
                 best_pred_fine, best_epoch = save_ckpt_model(model, cfg, scores_fine['mIoU'], best_pred_fine, best_epoch, epoch)
                 # Log
                 update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=scores_fine)   
-                log = '\n=>Epoches %i, best fine = %.4f' % (epoch, best_pred_fine)
+                log = '\n=>Epoches %i, best fine = %.4f \n\n' % (epoch, best_pred_fine)
                 print(log)
                 f_log.write(log)
                 f_log.flush()
@@ -366,7 +364,7 @@ def update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=None)
 
 
 if __name__ == '__main__':
-    from configs.configl_unet import Config
+    from configs.config_unet import Config
 
     cfg = Config(train=True)
     args = argParser()
