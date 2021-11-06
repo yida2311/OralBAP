@@ -3,9 +3,44 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-__all__ = [ 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
+__all__ = ['SegClsLoss', 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
             'FocalLoss', 'SoftCrossEntropyLoss2d']
 
+
+#===================Seg Cls Loss ==============================
+class SegClsLoss(nn.Module):
+    def __init__(self,
+                alpha = 1.0,
+                beta = 1e-2,
+                use_size_const = False,
+                use_curriculum = False,
+                ):
+        super(SegClsLoss, self).__init__()
+        self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.elb_loss = None  # Extended Log-Barrier Loss
+
+        self.alpha = alpha
+        self.beta = beta
+        self.use_size_const = use_size_const
+        self.use_curriculum = use_curriculum
+        self.T = 120
+    
+    def forward(self, seg_feat, seg_label, cls_feat, cls_label, gt_label, epoch):
+        seg_term = self.seg_loss(seg_feat, seg_label)
+        cls_term = self.cls_loss(cls_feat, cls_label)
+        loss = seg_term + self.alpha * cls_term
+
+        if self.use_size_const:
+            elb_term = self.elb_loss(seg_feat)
+            loss += self.beta * elb_term
+        
+        if self.use_curriculum:
+            gt_term = self.gt_loss(seg_feat, gt_label)
+            loss += (1-epoch/self.T) * gt_term
+        
+        return loss
 
 
 #================== KL Divergence Loss =========================

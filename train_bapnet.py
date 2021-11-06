@@ -16,8 +16,8 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, Transformer, TransformerVal
-from models import Unet
-from utils.loss import CrossEntropyLoss
+from models import BAPnet
+from utils.loss import CrossEntropyLoss, SegClsLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
@@ -25,7 +25,7 @@ from utils.vis_util import class_to_RGB, RGB_mapping_to_class
 from utils.util import seed_everything, argParser, update_writer
 
 
-
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 SEED = 55
 seed_everything(SEED)
 
@@ -61,7 +61,7 @@ def main(cfg, device, local_rank=0):
             os.makedirs(cfg.fine_output_path)
     
     ### MODEL INIT
-    model = Unet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+    model = BAPnet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
     if distributed:
         model = model_Single2Parallel(model, device, local_rank)
     else:
@@ -108,6 +108,8 @@ def main(cfg, device, local_rank=0):
     # loss_cfg = cfg.loss_cfg[cfg.loss]
     if cfg.loss == "ce":
         criterion = nn.CrossEntropyLoss(reduction='mean')
+    elif cfg.loss == "bap":
+        criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
     num_epochs = cfg.num_epochs
@@ -117,7 +119,8 @@ def main(cfg, device, local_rank=0):
     batch_time = AverageMeter("BatchTime", ':3.3f')
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4)
     scheduler = LR_Scheduler(cfg.scheduler, learning_rate, num_epochs, len(dataloader_train))
-    metrics = ConfusionMatrix(cfg.n_class)
+    seg_metrics = ConfusionMatrix(cfg.n_class)
+    cls_metrics = ConfusionMatrix(cfg.n_class)
     best_pred_fine = 0.0
     best_epoch = 0
     print("start training......")
@@ -156,9 +159,9 @@ def main(cfg, device, local_rank=0):
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            preds = model.forward(imgs)
-            preds = F.interpolate(preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(preds, masks) 
+            seg_preds, seg_label, cls_preds, cls_label = model.forward(imgs, masks)
+            seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
+            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, masks, epoch) 
             if distributed:
                 loss.backward()
                 optimizer.step()
@@ -171,18 +174,23 @@ def main(cfg, device, local_rank=0):
                     optimizer.zero_grad()
             # output
             train_loss += loss.item()
-            outputs = preds.cpu().detach().numpy()
+            outputs = seg_preds.cpu().detach().numpy()
             predictions = np.argmax(outputs, axis=1)
-            metrics.update(masks_npy, predictions)
-            scores_train = metrics.get_scores()
+            seg_metrics.update(masks_npy, predictions)
+            seg_scores_train = seg_metrics.get_scores()
+            cls_label = cls_label.cpu().detach().numpy()
+            cls_predictions = np.argmax(cls_preds.cpu().detach().numpy(), axis=1)
+            cls_metrics.update(cls_label, cls_predictions)
+            cls_scores_train = cls_metrics.get_scores()
+
             batch_time.update(time.time()-start_time)
             start_time = time.time()
             if i_batch % 50 == 1 and local_rank == 0:
-                tbar.set_description('Train loss: %.4f; mIoU: %.4f; batch time: %.2f' % 
-                            (train_loss / (i_batch + 1), scores_train["mIoU"], batch_time.avg))
+                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f' % 
+                            (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], batch_time.avg))
             
-
-        metrics.reset()
+        seg_metrics.reset()
+        cls_metrics.reset()
         batch_time.reset() 
 
         ### Evaluation
@@ -195,19 +203,16 @@ def main(cfg, device, local_rank=0):
                 tbar2 = tqdm(range(num_slides))
                 start_time = time.time()
                 for i in tbar2:
-                    dataset_coarse.get_patches_from_index(i)
-                    pred, _, _ = evaluator.inference(dataset_coarse, model)
-                    label = dataset_coarse.get_slide_mask_from_index(i)
-                    evaluator.update_scores(label, pred)
-                    scores_coarse = evaluator.get_scores()
+                    pred = evaluator.val(dataset_coarse, model, i)
+                    seg_scores_coarse, cls_scores_coarse = evaluator.get_scores()
                     batch_time.update(time.time()-start_time)
-                    tbar2.set_description('coarse mIoU: %.4f; slide time: %.2f' % 
-                                            (scores_coarse["mIoU"], batch_time.avg))
+                    tbar2.set_description('coarse seg mIoU: %.4f; cls F1: %.4f; slide time: %.2f' % 
+                                            (seg_scores_coarse["mIoU"], cls_scores_coarse['mF1'], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
                     
                 batch_time.reset()
-                scores_coarse = evaluator.get_scores()
+                seg_scores_coarse, cls_scores_coarse = evaluator.get_scores()
                 evaluator.reset_metrics()
 
                 # Fine
@@ -216,26 +221,25 @@ def main(cfg, device, local_rank=0):
                 tbar3 = tqdm(range(num_slides))
                 start_time = time.time()
                 for i in tbar3:
-                    dataset_fine.get_patches_from_index(i)
-                    pred, _, _ = evaluator.inference(dataset_fine, model)
-                    label = dataset_fine.get_slide_mask_from_index(i)
-                    evaluator.update_scores(label, pred)
-                    scores_fine = evaluator.get_scores()
+                    pred = evaluator.val(dataset_fine, model, i)
+                    seg_scores_fine, cls_scores_fine = evaluator.get_scores()
                     batch_time.update(time.time()-start_time)
-                    tbar3.set_description('fine mIoU: %.4f; slide time: %.2f' % 
-                                            (scores_fine["mIoU"], batch_time.avg))
+                    tbar3.set_description('fine seg mIoU: %.4f; cls F1: %.4f; slide time: %.2f' % 
+                                            (seg_scores_fine["mIoU"], cls_scores_fine['mF1'], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
                     
                 batch_time.reset()
-                scores_fine = evaluator.get_scores()
+                seg_scores_fine, cls_scores_fine = evaluator.get_scores()
                 evaluator.reset_metrics()
 
                 # Save Model
-                best_pred_fine, best_epoch = save_ckpt_model(model, cfg, scores_fine['mIoU'], best_pred_fine, best_epoch, epoch)
+                best_pred_fine, best_epoch = save_ckpt_model(model, cfg, seg_scores_fine['mIoU'], best_pred_fine, best_epoch, epoch)
                 # Log
-                update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=scores_fine)   
-                log = '\n=>Epoches %i, best fine = %.4f \n\n' % (epoch, best_pred_fine)
+                update_log(f_log, cfg, seg_scores_train, cls_scores_train, 
+                            seg_scores_coarse, cls_scores_coarse, epoch, 
+                            seg_scores_fine=seg_scores_fine, cls_scores_fine=cls_scores_fine)   
+                log = '\n=>Epoches %i, best fine = %.4f, best epoch = %i \n\n' % (epoch, best_pred_fine, best_epoch)
                 print(log)
                 f_log.write(log)
                 f_log.flush()
@@ -244,11 +248,15 @@ def main(cfg, device, local_rank=0):
                         loss=train_loss/len(tbar),
                         lr=optimizer.param_groups[0]['lr'],
                         mIOU={
-                            "train": scores_train['mIoU'],
-                            "coarse": scores_coarse['mIoU'],
-                            "fine": scores_fine['mIoU'],
+                            "train": seg_scores_train['mIoU'],
+                            "coarse": seg_scores_coarse['mIoU'],
+                            "fine": seg_scores_fine['mIoU'],
                         },
-                        
+                        mF1={
+                            "train": cls_scores_train['mF1'],
+                            "coarse": cls_scores_coarse['mF1'],
+                            "fine": cls_scores_fine['mF1'],
+                        }
                 )
                 update_writer(writer, writer_info, epoch)
 
@@ -263,15 +271,13 @@ def main(cfg, device, local_rank=0):
         with torch.no_grad():
             num_slides = len(dataset_coarse.slides)
             for i in range(num_slides):
-                dataset_coarse.get_patches_from_index(i)
-                _, pred_rgb, _ = evaluator.inference(dataset_coarse, model)
+                pred_rgb = evaluator.inference(dataset_coarse, model, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.coarse_output_path, dataset_coarse.slide+'.png'), pred_rgb)
 
             num_slides = len(dataset_fine.slides)
             for i in range(num_slides):
-                dataset_fine.get_patches_from_index(i)
-                _, pred_rgb, _ = evaluator.inference(dataset_fine, model)
+                pred_rgb = evaluator.inference(dataset_fine, model, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.fine_output_path, dataset_fine.slide+'.png'), pred_rgb)
                 
@@ -282,19 +288,61 @@ class SlideInference(object):
         self.n_class = n_class
         self.num_workers = num_workers
         self.batch_size = batch_size
-        self.metrics = ConfusionMatrix(n_class)
+        self.seg_metrics = ConfusionMatrix(n_class)
+        self.cls_metrics = ConfusionMatrix(n_class)
     
-    def update_scores(self, gt, pred):
-        self.metrics.update(gt, pred)
 
     def get_scores(self):
-        scores = self.metrics.get_scores()
-        return scores
+        seg_scores = self.seg_metrics.get_scores()
+        cls_scores = self.cls_metrics.get_scores()
+        return seg_scores, cls_scores
     
     def reset_metrics(self):
-        self.metrics.reset()
+        self.seg_metrics.reset()
+        self.cls_metrics.reset()
+    
+    def val(self, dataset, model, inds):
+        dataset.get_patches_from_index(inds)
+        dataloader = DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False, pin_memory=True)
+        output = np.zeros((self.n_class, dataset.slide_size[0], dataset.slide_size[1])) # n_class x H x W
+        template = np.zeros(dataset.slide_size, dtype='uint8') # H x W
+        step = dataset.slide_step
 
-    def inference(self, dataset, model):
+        for sample in dataloader:
+            imgs = sample['image']
+            masks = sample['mask']
+            coord = sample['coord']
+            with torch.no_grad():
+                imgs = imgs.cuda()
+                masks = masks.cuda()
+                seg_preds, seg_label, cls_preds, cls_label = model.forward(imgs, masks)
+                seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
+                seg_preds_np = seg_preds.cpu().detach().numpy()
+            
+            cls_predictions = np.argmax(cls_preds.cpu().detach().numpy(), axis=1)
+            cls_label = cls_label.cpu().detach().numpy()
+            self.cls_metrics.update(cls_label, cls_predictions)
+
+            _, _, h, w = seg_preds_np.shape
+
+            for i in range(imgs.shape[0]):
+                x = math.floor(coord[0][i] * step[0])
+                y = math.floor(coord[1][i] * step[1])
+                output[:, x:x+h, y:y+w] += seg_preds_np[i]
+                template[x:x+h, y:y+w] += np.ones((h, w), dtype='uint8')
+    
+        template[template==0] = 1
+        output = output / template
+        prediction = np.argmax(output, axis=0)
+
+        slide_mask = dataset.get_slide_mask_from_index(inds)
+        self.seg_metrics.update(slide_mask, prediction)
+
+        return class_to_RGB(prediction)
+
+
+    def inference(self, dataset, model, inds):
+        dataset.get_patches_from_index(inds)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=False, pin_memory=True)
         output = np.zeros((self.n_class, dataset.slide_size[0], dataset.slide_size[1])) # n_class x H x W
         template = np.zeros(dataset.slide_size, dtype='uint8') # H x W
@@ -305,7 +353,7 @@ class SlideInference(object):
             coord = sample['coord']
             with torch.no_grad():
                 imgs = imgs.cuda()
-                preds = model.forward(imgs)
+                preds = model.inference(imgs)
                 preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 preds_np = preds.cpu().detach().numpy()
             _, _, h, w = preds_np.shape
@@ -320,30 +368,44 @@ class SlideInference(object):
         output = output / template
         prediction = np.argmax(output, axis=0)
 
-        output = torch.from_numpy(output).unsqueeze(0)
-        output = F.interpolate(output, size=(dataset.slide_size[0]//4, dataset.slide_size[1]//4), mode='bilinear')
-        
-        return prediction, class_to_RGB(prediction), output.squeeze(0).numpy()
+        return class_to_RGB(prediction)
 
 
-def update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=None):
+def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse, cls_scores_coarse, epoch, seg_scores_fine=None, cls_scores_fine=None):
     log = ""
-    log = log + 'epoch [{}/{}] mIoU: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, scores_train['mIoU'], scores_coarse['mIoU'], scores_fine['mIoU']) + "\n"
-    log = log + "    [train] IoU = " + str(scores_train['IoU']) + "\n"
-    log = log + "    [train] Accuracy_mean = " + str(scores_train['mAcc'])  + "\n"
-    log = log + "    [train] Precision = " + str(scores_train['Precision']) + "\n"
-    log = log + "    [train] Recall = " + str(scores_train['Recall']) + "\n"
+    log = log + 'epoch [{}/{}] mIoU: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, seg_scores_train['mIoU'], seg_scores_coarse['mIoU'], seg_scores_fine['mIoU']) + "\n"
+    log = log + 'epoch [{}/{}] mF1: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, cls_scores_train['mF1'], cls_scores_coarse['mF1'], cls_scores_fine['mF1']) + "\n"
+    
+    log = log + "   Seg metric   \n"
+    log = log + "    [train] IoU = " + str(seg_scores_train['IoU']) + "\n"
+    log = log + "    [train] Accuracy_mean = " + str(seg_scores_train['mAcc'])  + "\n"
+    log = log + "    [train] Precision = " + str(seg_scores_train['Precision']) + "\n"
+    log = log + "    [train] Recall = " + str(seg_scores_train['Recall']) + "\n"
     log = log + "    ------------------------------------ \n"
-    log = log + "    [coarse] IoU = " + str(scores_coarse['IoU']) + "\n"
-    log = log + "    [coarse] Accuracy_mean = " + str(scores_coarse['mAcc'])  + "\n"
-    log = log + "    [coarse] Precision = " + str(scores_coarse['Precision']) + "\n"
-    log = log + "    [coarse] Recall = " + str(scores_coarse['Recall']) + "\n"
-    if scores_fine:
+    log = log + "    [coarse] IoU = " + str(seg_scores_coarse['IoU']) + "\n"
+    log = log + "    [coarse] Accuracy_mean = " + str(seg_scores_coarse['mAcc'])  + "\n"
+    log = log + "    [coarse] Precision = " + str(seg_scores_coarse['Precision']) + "\n"
+    log = log + "    [coarse] Recall = " + str(seg_scores_coarse['Recall']) + "\n"
+    if seg_scores_fine:
         log = log + "    ------------------------------------ \n"
-        log = log + "    [fine] IoU = " + str(scores_fine['IoU']) + "\n"
-        log = log + "    [fine] Accuracy_mean = " + str(scores_fine['mAcc'])  + "\n"
-        log = log + "    [fine] Precision = " + str(scores_fine['Precision']) + "\n"
-        log = log + "    [fine] Recall = " + str(scores_fine['Recall']) + "\n"
+        log = log + "    [fine] IoU = " + str(seg_scores_fine['IoU']) + "\n"
+        log = log + "    [fine] Accuracy_mean = " + str(seg_scores_fine['mAcc'])  + "\n"
+        log = log + "    [fine] Precision = " + str(seg_scores_fine['Precision']) + "\n"
+        log = log + "    [fine] Recall = " + str(seg_scores_fine['Recall']) + "\n"
+    
+    log = log + "\n   Cls metric   \n"
+    log = log + "    [train] F1 = " + str(cls_scores_train['F1']) + "\n"
+    log = log + "    [train] Precision = " + str(cls_scores_train['Precision']) + "\n"
+    log = log + "    [train] Recall = " + str(cls_scores_train['Recall']) + "\n"
+    log = log + "    ------------------------------------ \n"
+    log = log + "    [coarse] F1 = " + str(cls_scores_coarse['IoU']) + "\n"
+    log = log + "    [coarse] Precision = " + str(cls_scores_coarse['Precision']) + "\n"
+    log = log + "    [coarse] Recall = " + str(cls_scores_coarse['Recall']) + "\n"
+    if seg_scores_fine:
+        log = log + "    ------------------------------------ \n"
+        log = log + "    [fine] F1 = " + str(cls_scores_fine['F1']) + "\n"
+        log = log + "    [fine] Precision = " + str(cls_scores_fine['Precision']) + "\n"
+        log = log + "    [fine] Recall = " + str(cls_scores_fine['Recall']) + "\n"
    
     log += "================================\n"
     print(log)
@@ -352,7 +414,7 @@ def update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=None)
 
 
 if __name__ == '__main__':
-    from configs.config_unet import Config
+    from configs.config_bapnet import Config
 
     cfg = Config(train=True)
     args = argParser()

@@ -1,11 +1,12 @@
 import os 
 import pandas as pd 
+import json
 
 
-def generate_dataset_csv(path, name, save_dir):
-    slides = os.listdir(path)
+def generate_dataset_csv(slide_list, path, name, save_dir):
+    # slides = os.listdir(path)
     res = []
-    for slide in slides:
+    for slide in slide_list:
         slide_dir = os.path.join(path, slide)
         for patch in os.listdir(slide_dir):
             info = {}
@@ -30,10 +31,13 @@ def parse_patch_name(patch):
 
 
 if __name__ == '__main__':
+    with open('/media/ldy/7E1CA94545711AE6/OSCC/train_val_part.json') as f:
+        cnt = json.load(f)
     suffix = 'train'
-    src = "/media/ldy/e5a10f4e-18fd-4656-80d8-055bc4078655/OSCC-Tile-v2/5x_1600/"
-    path = src + suffix
+    src = "/media/ldy/7E1CA94545711AE6/OSCC_FINE/full_anno/2.5x_tile/5x_640/"
+    slide_list = cnt[suffix]
+    path = src + 'patch'
     save_dir = src
-    name = suffix + "_1600.csv"
+    name = suffix + ".csv"
 
-    generate_dataset_csv(path, name, save_dir)
+    generate_dataset_csv(slide_list, path, name, save_dir)

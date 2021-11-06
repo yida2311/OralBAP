@@ -49,6 +49,8 @@ class ConfusionMatrix(object):
 
         recall = np.nan_to_num(np.diag(hist) / hist.sum(axis=1))
         precision = np.nan_to_num(np.diag(hist) / hist.sum(axis=0))
+        f1 = 2 * (precision * recall) / (precision + recall)
+        mean_f1 = np.mean(np.nan_to_num(f1))
 
         return {'Acc': acc,
                 'mAcc': mean_acc,
@@ -58,7 +60,9 @@ class ConfusionMatrix(object):
                 'mDice': mean_dice,
                 'fIoU': freq_iou,
                 'Recall': recall,
-                'Precision': precision
+                'Precision': precision,
+                'F1': f1,
+                'mF1': mean_f1
                 }
 
     def reset(self):

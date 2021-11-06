@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "unet"
+        self.model = "bapnet"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -14,6 +14,17 @@ class Config:
             'decoder_channels': (256, 128, 64, 64),
             'decoder_attention_type': 'scse',
             'in_channels': 3,
+            'aux_params': {
+                'memory_bank': {
+                    'K': 1000,
+                    'T': 100
+                },
+                'min_ratio': 0.1,
+                'pseudo_mask': {
+                    'high_thresh': 0.7,
+                    'low_thresh': 0.4,
+                }
+            }
         }
         self.train = train
 
@@ -62,7 +73,7 @@ class Config:
         self.val_vis = True # val result visualization
 
         # loss config
-        self.loss = "ce" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -73,13 +84,19 @@ class Config:
             },
             "focal": {
                 "gamma": 2,
-            }
+            },
+            "bap": {
+                "alpha": 1.0,
+                "beta": 1e-1,
+                "use_size_const": False,
+                "use_curriculum": True,
+            },
 
         }
 
         # task name
-        # self.task_name = "-".join([self.model, self.loss, simple_time()])
-        self.task_name = "-".join([self.model, self.loss, '[11-07]'])
+        self.task_name = "-".join([self.model, self.loss, simple_time()])
+        # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
             self.task_name += "-" + "train"
         else:
