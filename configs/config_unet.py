@@ -78,8 +78,7 @@ class Config:
         }
 
         # task name
-        # self.task_name = "-".join([self.model, self.loss, simple_time()])
-        self.task_name = "-".join([self.model, self.loss, '[11-07]'])
+        self.task_name = "-".join([self.model, self.loss, simple_time()])
         if train:
             self.task_name += "-" + "train"
         else:

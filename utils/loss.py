@@ -29,16 +29,19 @@ class SegClsLoss(nn.Module):
     
     def forward(self, seg_feat, seg_label, cls_feat, cls_label, gt_label, epoch):
         seg_term = self.seg_loss(seg_feat, seg_label)
+        loss = seg_term
+        if self.use_curriculum:
+            gt_term = self.gt_loss(seg_feat, gt_label)
+            loss = (1-epoch/self.T) * gt_term + epoch/self.T * loss
+
         cls_term = self.cls_loss(cls_feat, cls_label)
-        loss = seg_term + self.alpha * cls_term
+        loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
             elb_term = self.elb_loss(seg_feat)
             loss += self.beta * elb_term
         
-        if self.use_curriculum:
-            gt_term = self.gt_loss(seg_feat, gt_label)
-            loss += (1-epoch/self.T) * gt_term
+        
         
         return loss
 

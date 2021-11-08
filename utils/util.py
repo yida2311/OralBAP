@@ -39,5 +39,5 @@ def struct_time():
     return cur_time
 
 def simple_time():
-    cur_time = time.strftime("[%m-%d]", time.localtime())
+    cur_time = time.strftime("[%m-%d-%H]", time.localtime())
     return cur_time
