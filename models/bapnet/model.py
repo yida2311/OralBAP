@@ -81,7 +81,6 @@ class BAPnet(SegmentationModel):
         if ptr + batch_size <= self.K:
             self.queue[:, ptr:ptr + batch_size] = keys.T
         else:
-            
             self.queue[:, ptr:] = keys[:(self.K-ptr), :].T
             self.queue[:, :(ptr+batch_size-self.K)] = keys[(self.K-ptr):, :].T
 
@@ -103,18 +102,20 @@ class BAPnet(SegmentationModel):
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
         mask = one_hot(mask, self.n_class) # N x 4 x h x w
-        ## foreground prototype
+        ## reweighting
+        # sim[mask[:,1,...]==1] = 1
         sim = torch.unsqueeze(sim, dim=1)  # N x 1 x h x w
         weighted_feat = feature * (1-sim)
         digit = weighted_feat.unsqueeze(1) * mask.unsqueeze(2)  # N x 4 x 256 x h x w
-        digit[:, 1, ...] = feature * mask[:, :1, :, :]
+        # digit[:, 1, ...] = feature * mask[:, :1, :, :]
         # GAP
-        area = torch.sum(mask, dim=(2,3)) # N x 4
-        ratio = area / (h*w)
-        digit = torch.sum(digit, dim=(3,4)) / (area.unsqueeze(2) + 1) # N x 4 x 256
+        weight = torch.sum(mask*sim, dim=(2,3))
+        digit = torch.sum(digit, dim=(3,4)) / (weight.unsqueeze(2) + 1) # N x 4 x 256
         # filter out specific class label, if area < min_area
         label = torch.tensor(range(self.n_class), dtype=torch.long)
         label = label.repeat(n, 1).cuda()  # N x 4
+        area = torch.sum(mask, dim=(2,3)) # N x 4
+        ratio = area / (h*w)
         label[ratio<self.min_ratio] = -1
 
         proto = digit[:,1, :][label[:,1]==1]  # M x 256
@@ -165,7 +166,8 @@ class BAPnet(SegmentationModel):
                 proto_sel = proto[:, inds] # 256 x 20
             # similarity matrix
             feature_sin = feature[i].permute(1,2,0).view(-1, c)  # (hw) x 256
-            sim_sin = torch.mm(feature_sin, proto_sel) # (hw) x (k or 20)
+            sim_sin = F.relu(torch.mm(feature_sin, proto_sel)) # (hw) x (k or 20)
+            # sim_sin = torch.mm(feature_sin, proto_sel)
             sim[i] = torch.mean(sim_sin, dim=1).view(h, w)
 
         return sim
@@ -185,15 +187,16 @@ class BAPnet(SegmentationModel):
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         fg_mask = (mask != 1)
         noise_mask = (sim > self.high_thresh) & fg_mask
-        uncertain_mask = (sim < self.high_thresh) & (sim > self.low_thresh) & fg_mask
+        # uncertain_mask = (sim < self.high_thresh) & (sim > self.low_thresh) & fg_mask
 
         pseudo[noise_mask] = 1  # modify to normal
-        pseudo[uncertain_mask] = -1  # ignore
+        # pseudo[uncertain_mask] = -1  # ignore
 
         return pseudo
 
 
     def forward(self, img, mask):
+        _, H, W = mask.size()
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
         seg_feat, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
         # proto selection for similarity calculation
@@ -211,7 +214,9 @@ class BAPnet(SegmentationModel):
         # linear classifier
         cls_feat = self.classification_head(digit)
 
-        return seg_feat, seg_label, cls_feat, cls_label
+        sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
+
+        return seg_feat, seg_label, cls_feat, cls_label, sim
 
     def inference(self, img):
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
@@ -219,6 +224,19 @@ class BAPnet(SegmentationModel):
         seg_feat = self.segmentation_head(seg_feat)
         
         return seg_feat
+    
+    def get_similarity_map(self, img, mask):
+        encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
+        _, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
+        # proto selection for similarity calculation
+        proto = self.prototype_selection() # 100 x 256
+        # similarity calculation
+        sim = self.similarity_calculation(feat, proto, mask) # n x h x w
+        # pseudo mask generation
+        pseudo = self.pseudo_mask_generation(sim, mask)
+
+        return sim, pseudo
+        
 
 # utils
 @torch.no_grad()

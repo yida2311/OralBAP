@@ -21,7 +21,7 @@ class Config:
                 },
                 'min_ratio': 0.1,
                 'pseudo_mask': {
-                    'high_thresh': 0.7,
+                    'high_thresh': 0.65,
                     'low_thresh': 0.4,
                 }
             }
@@ -60,6 +60,18 @@ class Config:
         }
         self.crop_size = 513
 
+        # test set
+        with open(root+'train_val_part.json', 'r') as f:
+            train_slide_list = json.load(f)['train']
+        self.testset_cfg = {
+            "slide_list": train_slide_list,
+            "img_dir": root +  "patch/",
+            "mask_dir": root +  "std_mask/",
+            "slide_mask_dir": "/media/ldy/7E1CA94545711AE6/OSCC/" + "2.5x_mask/std_mask/",
+            "meta_file": root + "tile_info.json",
+            "label": True,
+        }
+
         # train config
         self.scheduler = 'poly' # ['cos', 'poly', 'step', 'ym']
         self.lr = 1e-4
@@ -67,13 +79,15 @@ class Config:
         self.warmup_epochs = 2
         self.batch_size = 12
         self.acc_step = 1
-        self.ckpt_path = None # pretrained model
+        self.ckpt_path = None
+        if train:
+            self.ckpt_path = 'results/saved_models/bapnet-bap-[11-09-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
         # loss config
-        self.loss = "bap" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -90,8 +104,23 @@ class Config:
                 "beta": 1e-1,
                 "use_size_const": False,
                 "use_curriculum": True,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
             },
-
+            "bap2": {
+                "alpha": 1.0,
+                "beta": 1e-1,
+                "use_size_const": False,
+                "use_curriculum": True,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
+            },
         }
 
         # task name
@@ -110,6 +139,10 @@ class Config:
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
         # test cfg
-        self.testset_cfg = self.fineset_cfg
+        # self.testset_cfg = self.fineset_cfg
         self.test_output_path = out_root + "test predictions/" + self.task_name 
+        self.test_sim_path  = out_root + "test predictions/" + self.task_name +'/sim/'
+        self.test_pseudo_path  = out_root + "test predictions/" + self.task_name +'/pseudo/'
+
+
 

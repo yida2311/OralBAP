@@ -17,7 +17,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, Transformer, TransformerVal
 from models import BAPnet
-from utils.loss import CrossEntropyLoss, SegClsLoss
+from utils.loss import CrossEntropyLoss, SegClsLoss, SegClsLoss_v2
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
@@ -110,6 +110,9 @@ def main(cfg, device, local_rank=0):
         criterion = nn.CrossEntropyLoss(reduction='mean')
     elif cfg.loss == "bap":
         criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
+    elif cfg.loss == 'bap2':
+        print("BAP V2 Loss")
+        criterion = SegClsLoss_v2(**cfg.loss_cfg[cfg.loss])
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
     num_epochs = cfg.num_epochs
@@ -159,9 +162,9 @@ def main(cfg, device, local_rank=0):
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            seg_preds, seg_label, cls_preds, cls_label = model.forward(imgs, masks)
+            seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks)
             seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, masks, epoch) 
+            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sim, masks, epoch) 
             if distributed:
                 loss.backward()
                 optimizer.step()
@@ -315,7 +318,7 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                seg_preds, seg_label, cls_preds, cls_label = model.forward(imgs, masks)
+                seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             

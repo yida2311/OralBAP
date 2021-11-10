@@ -42,8 +42,9 @@ class BAPnetDecoder(nn.Module):
         self.blocks = nn.ModuleList(blocks)
 
         #### proto branch for classification and similarity calculation
+        self.inds = 1
         self.proto_brach = nn.Sequential(
-            nn.Conv2d(in_channels=out_channels[0], out_channels=512, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=out_channels[self.inds], out_channels=512, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.Dropout2d(0.5),
             nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1, stride=1, padding=0),
@@ -75,8 +76,8 @@ class BAPnetDecoder(nn.Module):
         for i, decoder_block in enumerate(self.blocks):
             skip = skips[i] if i < len(skips) else None
             x = decoder_block(x, skip)
-            if i == 0:
-                proto = x # x16, 256 channel
+            if i == self.inds:
+                proto = x # x8, 128 channel
         
         proto = self.proto_brach(proto)
 
