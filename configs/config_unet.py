@@ -18,33 +18,33 @@ class Config:
         self.train = train
 
         # data config
-        root = '/media/ldy/7E1CA94545711AE6/OSCC/2.5x_tile/2.5x_640/'
+        root = '/media/ldy/7E1CA94545711AE6/OSCC/'
+        train_root = root + '2.5x_tile/2.5x_640/'
         self.trainset_cfg = {
-            "img_dir": root + "patch/",
-            "mask_dir": root + "std_mask/",
-            "meta_file": root + "train.csv",
+            "img_dir": train_root + "patch/",
+            "mask_dir": train_root + "std_mask/",
+            "meta_file": train_root + "train.csv",
             "label": True,
         }
-        with open(root+'train_val_part.json', 'r') as f:
-            coarse_slide_list = json.load(f)['val']
+        with open(train_root+'train_coarse_fine.json', 'r') as f:
+            coarse_slide_list = json.load(f)['coarse']
         self.coarseset_cfg = {
             "slide_list": coarse_slide_list,
-            "img_dir": root +  "patch/",
-            "mask_dir": root +  "std_mask/",
-            "slide_mask_dir": "/media/ldy/7E1CA94545711AE6/OSCC/" + "2.5x_mask/std_mask/",
-            "meta_file": root + "tile_info.json",
+            "img_dir": train_root +  "patch/",
+            "mask_dir": train_root +  "std_mask/",
+            "slide_mask_dir": root + "2.5x_mask/std_mask/",
+            "meta_file": train_root + "tile_info.json",
             "label": True,
         }
 
-        fine_root = '/media/ldy/7E1CA94545711AE6/OSCC_FINE/full_anno/'
-        with open(fine_root+'2.5x_tile/slide.json', 'r') as f:
-            fine_slide_list = json.load(f)
+        with open(train_root+'train_coarse_fine.json', 'r') as f:
+            fine_slide_list = json.load(f)['fine']
         self.fineset_cfg = {
             "slide_list": fine_slide_list,
-            "img_dir": fine_root +  "2.5x_tile/2.5x_640/patch/",
-            "mask_dir": fine_root + "2.5x_tile/2.5x_640/std_mask/",
-            "slide_mask_dir": fine_root + "2.5x_fine_mask/std_mask/",
-            "meta_file": fine_root + "2.5x_tile/2.5x_640/tile_info.json",
+            "img_dir": train_root +  "patch/",
+            "mask_dir": train_root +  "std_mask/",
+            "slide_mask_dir": root + "2.5x_mask_fine/std_mask/",
+            "meta_file": train_root + "tile_info.json",
             "label": True,
         }
         self.crop_size = 513
@@ -57,6 +57,8 @@ class Config:
         self.batch_size = 12
         self.acc_step = 1
         self.ckpt_path = None # pretrained model
+        if not train:
+            self.ckpt_path = 'results/saved_models/bapnet-bap-[11-09-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
@@ -73,8 +75,29 @@ class Config:
             },
             "focal": {
                 "gamma": 2,
-            }
-
+            },
+            "bap": {
+                "alpha": 1.0,
+                "beta": 1e-1,
+                "use_size_const": False,
+                "use_curriculum": True,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
+            },
+            "bap2": {
+                "alpha": 1.0,
+                "beta": 1e-1,
+                "use_size_const": False,
+                "use_curriculum": True,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
+            },
         }
 
         # task name

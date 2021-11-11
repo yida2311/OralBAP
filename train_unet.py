@@ -180,7 +180,7 @@ def main(cfg, device, local_rank=0):
             if i_batch % 50 == 1 and local_rank == 0:
                 tbar.set_description('Train loss: %.4f; mIoU: %.4f; batch time: %.2f' % 
                             (train_loss / (i_batch + 1), scores_train["mIoU"], batch_time.avg))
-            
+            # break
 
         metrics.reset()
         batch_time.reset() 
@@ -205,6 +205,7 @@ def main(cfg, device, local_rank=0):
                                             (scores_coarse["mIoU"], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
+                    # break
                     
                 batch_time.reset()
                 scores_coarse = evaluator.get_scores()
@@ -226,6 +227,7 @@ def main(cfg, device, local_rank=0):
                                             (scores_fine["mIoU"], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
+                    # break
                     
                 batch_time.reset()
                 scores_fine = evaluator.get_scores()
@@ -251,6 +253,7 @@ def main(cfg, device, local_rank=0):
                         
                 )
                 update_writer(writer, writer_info, epoch)
+        # break
 
     if local_rank == 0:     
         f_log.close() 
@@ -267,6 +270,7 @@ def main(cfg, device, local_rank=0):
                 _, pred_rgb, _ = evaluator.inference(dataset_coarse, model)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.coarse_output_path, dataset_coarse.slide+'.png'), pred_rgb)
+                # break
 
             num_slides = len(dataset_fine.slides)
             for i in range(num_slides):
@@ -274,6 +278,7 @@ def main(cfg, device, local_rank=0):
                 _, pred_rgb, _ = evaluator.inference(dataset_fine, model)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.fine_output_path, dataset_fine.slide+'.png'), pred_rgb)
+                # break
                 
 
               
