@@ -1,3 +1,4 @@
+import cv2
 import torch
 from torchvision import transforms
 import torchvision.transforms.functional as F
@@ -12,6 +13,20 @@ from .utils import np2pil
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 MEAN = [0.798, 0.621, 0.841]
 STD = [0.125, 0.228, 0.089]
+
+
+class TransformerVal:
+    def __init__(self):
+        self.master = albumentations.Compose([
+            albumentations.Normalize(mean=MEAN, std=STD),
+            ToTensor(),
+        ])
+    
+    def __call__(self, image=None, mask=None):
+        result = self.master(image=image)
+        if mask is not None:
+            result['mask'] = torch.tensor(mask, dtype=torch.long)
+        return result
 
 
 class Transformer:
@@ -34,21 +49,4 @@ class Transformer:
         result['image'] = self.to_tensor(image=result['image'])['image']
         result['mask'] = torch.tensor(result['mask'], dtype=torch.long)
         return result
-    
-
-class TransformerVal:
-    def __init__(self):
-        self.master = albumentations.Compose([
-            albumentations.Normalize(mean=MEAN, std=STD),
-            ToTensor(),
-        ])
-    
-    def __call__(self, image=None, mask=None):
-        result = self.master(image=image)
-        if mask is not None:
-            result['mask'] = torch.tensor(mask, dtype=torch.long)
-        return result
-
-
-
 

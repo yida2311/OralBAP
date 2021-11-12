@@ -244,13 +244,10 @@ def main(cfg, device, local_rank=0):
                 # Writer  
                 writer_info.update(
                         loss=train_loss/len(tbar),
-                        lr=optimizer.param_groups[0]['lr'],
-                        mIOU={
-                            "train": scores_train['mIoU'],
-                            "coarse": scores_coarse['mIoU'],
-                            "fine": scores_fine['mIoU'],
-                        },
-                        
+                        # lr=optimizer.param_groups[0]['lr'],
+                        train_mIoU=scores_train['mIoU'],
+                        coarse_mIoU=scores_coarse['mIoU'],
+                        fine_mIoU=scores_fine['mIoU'],   
                 )
                 update_writer(writer, writer_info, epoch)
         # break

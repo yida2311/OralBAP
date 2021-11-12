@@ -89,7 +89,7 @@ class SegClsLoss_v2(nn.Module):
         self.beta = beta
         self.use_size_const = use_size_const
         self.use_curriculum = use_curriculum
-        self.T = 120 * 2
+        self.T = 120 
     
     def size_const(self, mask_pred):
         """"
@@ -122,7 +122,8 @@ class SegClsLoss_v2(nn.Module):
         loss = seg_term
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
-            loss = (0.5-epoch/self.T) * gt_term + (0.5+epoch/self.T) * loss
+            w = epoch/self.T*0.8 + 0.1
+            loss =  w* loss + (1-w) * gt_term
 
         cls_term = self.cls_loss(cls_feat, cls_label)
         loss = loss + self.alpha * cls_term

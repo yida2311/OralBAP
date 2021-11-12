@@ -44,10 +44,10 @@ class BAPnetDecoder(nn.Module):
         #### proto branch for classification and similarity calculation
         self.inds = 1
         self.proto_brach = nn.Sequential(
-            nn.Conv2d(in_channels=out_channels[self.inds], out_channels=512, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(in_channels=out_channels[self.inds], out_channels=256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.Dropout2d(0.5),
-            nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1, stride=1, padding=0),
+            nn.Conv2d(in_channels=256, out_channels=256, kernel_size=1, stride=1, padding=0),
             nn.ReLU(),
             nn.Dropout2d(0.5),
         )

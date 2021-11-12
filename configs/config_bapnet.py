@@ -34,6 +34,7 @@ class Config:
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
             "mask_dir": train_root + "std_mask/",
+            "sim_dir": train_root + 'sim/',
             "meta_file": train_root + "train.csv",
             "label": True,
         }

@@ -28,7 +28,7 @@ def update_writer(writer, writer_info, epoch):
     for k, v in writer_info.items():
         if isinstance(v, dict):
             writer.add_scalars(k, v, epoch)
-        elif isinstance(v, torch.Tensor):
+        elif isinstance(v, torch.Tensor) and v.ndim>1:
             writer.add_image(k, v, epoch)
         else:
             writer.add_scalar(k, v, epoch)

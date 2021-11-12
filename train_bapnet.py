@@ -120,6 +120,10 @@ def main(cfg, device, local_rank=0):
     evaluation = cfg.evaluation
     val_vis = cfg.val_vis
     batch_time = AverageMeter("BatchTime", ':3.3f')
+    ## temp for sim_max, sim_min, sim_mean
+    sim_max = AverageMeter("SimMax")
+    sim_min = AverageMeter("SimMin")
+    sim_mean = AverageMeter("SimMean")
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4)
     scheduler = LR_Scheduler(cfg.scheduler, learning_rate, num_epochs, len(dataloader_train))
     seg_metrics = ConfusionMatrix(cfg.n_class)
@@ -142,7 +146,8 @@ def main(cfg, device, local_rank=0):
     writer_info = {}
 
     ### Running
-    evaluator = SlideInference(cfg.n_class, cfg.num_workers, cfg.batch_size)
+    # evaluator = SlideInference(cfg.n_class, cfg.num_workers, cfg.batch_size)
+    evaluator = SlideInference(cfg.n_class, cfg.num_workers, 8)
     #===========================================================
     for epoch in tqdm(range(num_epochs)):
         optimizer.zero_grad()
@@ -175,6 +180,15 @@ def main(cfg, device, local_rank=0):
                 if i_batch%acc_step == 0 or i_batch==len(dataset_train)-1:
                     optimizer.step()
                     optimizer.zero_grad()
+                
+            ## sim hist
+            fg_masks = (masks == 2) + (masks == 3)
+            fg_sim = sim[fg_masks].cpu().detach()
+            if fg_sim.numel() > 0:
+                sim_max.update(fg_sim.max()) 
+                sim_min.update(fg_sim.min()) 
+                sim_mean.update(fg_sim.mean())
+
             # output
             train_loss += loss.item()
             outputs = seg_preds.cpu().detach().numpy()
@@ -191,10 +205,22 @@ def main(cfg, device, local_rank=0):
             if i_batch % 50 == 1 and local_rank == 0:
                 tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f' % 
                             (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], batch_time.avg))
-            
+            # break
         seg_metrics.reset()
         cls_metrics.reset()
         batch_time.reset() 
+
+        # sim in writer
+        train_info = dict(
+            loss=train_loss/len(tbar),
+            simMax=sim_max.avg,
+            simMin=sim_min.avg,
+            simMean=sim_mean.avg
+        )
+        update_writer(writer, train_info, epoch)
+        sim_max.reset()
+        sim_min.reset()
+        sim_mean.reset()
 
         ### Evaluation
         if evaluation and epoch % 5 == 4 and local_rank == 0:
@@ -248,18 +274,13 @@ def main(cfg, device, local_rank=0):
                 f_log.flush()
                 # Writer  
                 writer_info.update(
-                        loss=train_loss/len(tbar),
-                        lr=optimizer.param_groups[0]['lr'],
-                        mIOU={
-                            "train": seg_scores_train['mIoU'],
-                            "coarse": seg_scores_coarse['mIoU'],
-                            "fine": seg_scores_fine['mIoU'],
-                        },
-                        mF1={
-                            "train": cls_scores_train['mF1'],
-                            "coarse": cls_scores_coarse['mF1'],
-                            "fine": cls_scores_fine['mF1'],
-                        }
+                        # lr=optimizer.param_groups[0]['lr'],
+                        train_mIoU=seg_scores_train['mIoU'],
+                        coarse_mIoU=seg_scores_coarse['mIoU'],
+                        fine_mIoU=seg_scores_fine['mIoU'], 
+                        train_mF1=cls_scores_train['mF1'],
+                        coarse_mF1=cls_scores_coarse['mF1'],
+                        fine_mF1=cls_scores_fine['mF1'],
                 )
                 update_writer(writer, writer_info, epoch)
 
@@ -318,7 +339,7 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks)
+                seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks, None)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
@@ -421,5 +442,7 @@ if __name__ == '__main__':
 
     cfg = Config(train=True)
     args = argParser()
-
-    main(cfg, device, local_rank=local_rank)
+    threshs = [1.0, 0.8, 0.6, 0.4]
+    for th in threshs:
+        cfg.model_cfg['aux_params']['pseudo_mask']['high_thresh'] = th
+        main(cfg, device, local_rank=local_rank)
