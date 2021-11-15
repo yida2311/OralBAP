@@ -4,8 +4,10 @@ import time
 import cv2
 import math
 import joblib
+from numpy.core.numeric import full
 import torch
 from torch import nn
+from torch._C import dtype
 import torch.nn.functional as F
 import numpy as np 
 from tqdm import tqdm
@@ -15,7 +17,7 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
-from dataset import OralDataset, OralSlide, Transformer, TransformerVal
+from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
 from models import BAPnet
 from utils.loss import CrossEntropyLoss, SegClsLoss, SegClsLoss_v2
 from utils.lr_scheduler import LR_Scheduler
@@ -25,8 +27,10 @@ from utils.vis_util import class_to_RGB, RGB_mapping_to_class
 from utils.util import seed_everything, argParser, update_writer
 
 
+torch.backends.cudnn.enabled = True
+torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-SEED = 55
+SEED = 552
 seed_everything(SEED)
 
 distributed = False
@@ -55,6 +59,8 @@ def main(cfg, device, local_rank=0):
             os.makedirs(cfg.log_path)
         if not os.path.exists(cfg.writer_path):
             os.makedirs(cfg.writer_path)
+        # if not os.path.exists(cfg.sim_output_path): 
+        #     os.makedirs(cfg.sim_output_path)
         if not os.path.exists(cfg.coarse_output_path): 
             os.makedirs(cfg.coarse_output_path)
         if not os.path.exists(cfg.fine_output_path): 
@@ -108,7 +114,7 @@ def main(cfg, device, local_rank=0):
     # loss_cfg = cfg.loss_cfg[cfg.loss]
     if cfg.loss == "ce":
         criterion = nn.CrossEntropyLoss(reduction='mean')
-    elif cfg.loss == "bap":
+    elif cfg.loss == "bap1":
         criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
     elif cfg.loss == 'bap2':
         print("BAP V2 Loss")
@@ -121,9 +127,9 @@ def main(cfg, device, local_rank=0):
     val_vis = cfg.val_vis
     batch_time = AverageMeter("BatchTime", ':3.3f')
     ## temp for sim_max, sim_min, sim_mean
-    sim_max = AverageMeter("SimMax")
-    sim_min = AverageMeter("SimMin")
-    sim_mean = AverageMeter("SimMean")
+    # sim_max = AverageMeter("SimMax")
+    # sim_min = AverageMeter("SimMin")
+    # sim_mean = AverageMeter("SimMean")
     optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4)
     scheduler = LR_Scheduler(cfg.scheduler, learning_rate, num_epochs, len(dataloader_train))
     seg_metrics = ConfusionMatrix(cfg.n_class)
@@ -161,15 +167,16 @@ def main(cfg, device, local_rank=0):
         for i_batch, sample in enumerate(tbar):
             # input
             imgs = sample['image']
-            masks = sample['mask'].squeeze(1)
+            masks = sample['mask']
             imgs = imgs.cuda()
-            masks_npy = np.array(masks)
+            masks_npy = np.array(masks.clone().detach())
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks)
+            seg_preds, seg_label, cls_preds, cls_label, sims = model.forward(imgs, masks)
             seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sim, masks, epoch) 
+            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sims, masks, epoch) 
+            
             if distributed:
                 loss.backward()
                 optimizer.step()
@@ -177,17 +184,17 @@ def main(cfg, device, local_rank=0):
             else:
                 loss = loss / acc_step
                 loss.backward()
+        
                 if i_batch%acc_step == 0 or i_batch==len(dataset_train)-1:
                     optimizer.step()
                     optimizer.zero_grad()
-                
-            ## sim hist
-            fg_masks = (masks == 2) + (masks == 3)
-            fg_sim = sim[fg_masks].cpu().detach()
-            if fg_sim.numel() > 0:
-                sim_max.update(fg_sim.max()) 
-                sim_min.update(fg_sim.min()) 
-                sim_mean.update(fg_sim.mean())
+            # ## sim hist
+            # fg_masks = (masks == 2) + (masks == 3)
+            # fg_sim = sims[fg_masks].cpu().detach()
+            # if fg_sim.numel() > 0:
+            #     sim_max.update(fg_sim.max()) 
+            #     sim_min.update(fg_sim.min()) 
+            #     sim_mean.update(fg_sim.mean())
 
             # output
             train_loss += loss.item()
@@ -200,6 +207,10 @@ def main(cfg, device, local_rank=0):
             cls_metrics.update(cls_label, cls_predictions)
             cls_scores_train = cls_metrics.get_scores()
 
+            # update sim
+            # if epoch >= 0:
+            #     update_save_sim(sample, sims.cpu().detach(), cfg.sim_output_path)
+
             batch_time.update(time.time()-start_time)
             start_time = time.time()
             if i_batch % 50 == 1 and local_rank == 0:
@@ -209,18 +220,19 @@ def main(cfg, device, local_rank=0):
         seg_metrics.reset()
         cls_metrics.reset()
         batch_time.reset() 
+        print(model.thresh)
 
         # sim in writer
-        train_info = dict(
-            loss=train_loss/len(tbar),
-            simMax=sim_max.avg,
-            simMin=sim_min.avg,
-            simMean=sim_mean.avg
-        )
-        update_writer(writer, train_info, epoch)
-        sim_max.reset()
-        sim_min.reset()
-        sim_mean.reset()
+        # train_info = dict(
+        #     loss=train_loss/len(tbar),
+        #     simMax=sim_max.avg,
+        #     simMin=sim_min.avg,
+        #     simMean=sim_mean.avg
+        # )
+        # update_writer(writer, train_info, epoch)
+        # sim_max.reset()
+        # sim_min.reset()
+        # sim_mean.reset()
 
         ### Evaluation
         if evaluation and epoch % 5 == 4 and local_rank == 0:
@@ -273,8 +285,10 @@ def main(cfg, device, local_rank=0):
                 f_log.write(log)
                 f_log.flush()
                 # Writer  
+                thresh = model.thresh.cpu().item()
                 writer_info.update(
                         # lr=optimizer.param_groups[0]['lr'],
+                        thresh=thresh,
                         train_mIoU=seg_scores_train['mIoU'],
                         coarse_mIoU=seg_scores_coarse['mIoU'],
                         fine_mIoU=seg_scores_fine['mIoU'], 
@@ -339,7 +353,7 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks, None)
+                seg_preds, seg_label, cls_preds, cls_label, sim = model.forward(imgs, masks)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
@@ -437,12 +451,43 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
     f_log.flush()
 
 
+def update_save_sim(sample, sims, save_dir):
+    full_sims = sample['full_sim'].permute(0, 2, 3, 1).numpy() # N x H x W x 3
+    full_sims = np.array(full_sims*255, dtype='uint8')
+    sims = sims.permute(0, 2, 3, 1).numpy()
+    sims = np.array(sims*255, dtype='uint8')
+    crop_param = sample['crop_param']
+    transpose_param = sample['transpose_param']
+    flip_param = sample['flip_param']
+    name = sample['id']
+    bsz = len(name)
+
+    for i in range(bsz):
+        sim = inverseTransformerSim(sims[i], 
+                                    full_sims[i], 
+                                    crop_param=crop_param[i], 
+                                    transpose_param=transpose_param[i],
+                                    flip_param=flip_param[i],
+                                    )
+        slide = name[i].split('_')[0]
+        save_slide_dir = os.path.join(save_dir, slide)
+        if not os.path.exists(save_slide_dir):
+            os.makedirs(save_slide_dir)
+        sim_path = os.path.join(save_slide_dir, name[i]+'.png')
+        sim = cv2.cvtColor(sim, cv2.COLOR_BGR2RGB)
+        cv2.imwrite(sim_path, sim)
+
+
+
+
 if __name__ == '__main__':
     from configs.config_bapnet import Config
 
     cfg = Config(train=True)
     args = argParser()
-    threshs = [1.0, 0.8, 0.6, 0.4]
-    for th in threshs:
-        cfg.model_cfg['aux_params']['pseudo_mask']['high_thresh'] = th
-        main(cfg, device, local_rank=local_rank)
+    main(cfg, device, local_rank=local_rank)
+
+    # threshs = [1.0, 0.8, 0.6, 0.4]
+    # for th in threshs:
+    #     cfg.model_cfg['aux_params']['pseudo_mask']['high_thresh'] = th
+    #     main(cfg, device, local_rank=local_rank)

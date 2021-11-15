@@ -20,10 +20,7 @@ class Config:
                     'T': 100
                 },
                 'min_ratio': 0.1,
-                'pseudo_mask': {
-                    'high_thresh': 0.65,
-                    'low_thresh': 0.4,
-                }
+                'momentum': 0.9,
             }
         }
         self.train = train
@@ -34,7 +31,6 @@ class Config:
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
             "mask_dir": train_root + "std_mask/",
-            "sim_dir": train_root + 'sim/',
             "meta_file": train_root + "train.csv",
             "label": True,
         }
@@ -82,13 +78,13 @@ class Config:
         self.acc_step = 1
         self.ckpt_path = None
         if not train:
-            self.ckpt_path = 'results/saved_models/bapnet-bap-[11-09-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
+            self.ckpt_path = 'results/saved_models/bapnet-bap1-[11-13-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
         # loss config
-        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap1" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -100,7 +96,7 @@ class Config:
             "focal": {
                 "gamma": 2,
             },
-            "bap": {
+            "bap1": {
                 "alpha": 1.0,
                 "beta": 1e-1,
                 "use_size_const": False,
@@ -136,6 +132,8 @@ class Config:
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
+        self.sim_output_path = out_root + 'sim/' + self.task_name
+        self.pseudo_output_path = out_root + 'pseudo/' + self.task_name
         self.coarse_output_path = out_root + "corse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         

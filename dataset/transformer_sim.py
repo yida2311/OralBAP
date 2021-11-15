@@ -35,14 +35,14 @@ class RandomCropSim:
         height, width = image.shape[:2]
         assert height >= self.crop_height and width >= self.crop_width
         
-        x1, x2, y1, y2 = 0, self.crop_width, 0, self.crop_height
+        x1, y1, x2, y2 = 0, self.crop_width, 0, self.crop_height
         if random.random() < self.p:
             h_start, w_start = random.random(), random.random()
-            x1, x2, y1, y2 = get_random_crop_coords(height, width, self.crop_height, self.crop_width, h_start, w_start)
+            x1, y1, x2, y2 = get_random_crop_coords(height, width, self.crop_height, self.crop_width, h_start, w_start)
             image = image[y1:y2, x1:x2]
             masks = [mask[y1:y2, x1:x2] for mask in masks]
-        
-        return image, masks, (x1, x2, y1, y2)
+        coord = np.array([x1, y1, x2, y2], dtype=np.int)
+        return image, masks, coord
 
 class RandomFlipSim:
     def __init__(self, p=0.5):
@@ -90,10 +90,10 @@ class TransformerSim:
         image, masks, coord = self.random_crop(image=image, masks=masks)
         image, masks, trans_code = self.transpose(image=image, masks=masks)
         image, masks, flip_code = self.flip(image=image, masks=masks)
-        image = self.master(image=image)
+        image = self.master(image=image)['image']
 
         image = self.to_tensor(image=image)['image']
-        sim = self.to_tensor(image=masks[1])
+        sim = self.to_tensor(image=masks[1])['image']
         mask = torch.tensor(masks[0], dtype=torch.long)
         result = dict(image=image, sim=sim, mask=mask, crop_param=coord, transpose_param=trans_code, flip_param=flip_code)
         return result
@@ -106,8 +106,8 @@ def inverseTransformerSim(sim, old_sim, crop_param=None, transpose_param=None, f
     if transpose_param:
         if transpose_param == 1:
             sim = transpose(sim)
-    if crop_param:
-        x1, x2, y1, y2 = crop_param
+    if crop_param is not None:
+        x1, y1, x2, y2 = crop_param
         old_sim[y1:y2, x1:x2] = sim
     else:
         old_sim = sim 

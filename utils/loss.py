@@ -53,12 +53,13 @@ class SegClsLoss(nn.Module):
         return loss
 
     
-    def forward(self, seg_feat, seg_label, cls_feat, cls_label, gt_label, epoch):
+    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim, gt_label, epoch):
         seg_term = self.seg_loss(seg_feat, seg_label)
         loss = seg_term
         if self.use_curriculum:
+            w = epoch/self.T*0.8 + 0.2
             gt_term = self.gt_loss(seg_feat, gt_label)
-            loss = (1-epoch/self.T) * gt_term + epoch/self.T * loss
+            loss = (1-w) * gt_term + w * loss
 
         cls_term = self.cls_loss(cls_feat, cls_label)
         loss = loss + self.alpha * cls_term
