@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "unet"
+        self.model = "bapnetTA"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -14,11 +14,35 @@ class Config:
             'decoder_channels': (256, 128, 64, 64),
             'decoder_attention_type': 'scse',
             'in_channels': 3,
+            'aux_params': {
+                'memory_bank': {
+                    'K': 1000,
+                    'T': 100
+                },
+                'min_ratio': 0.1,
+                'momentum': 0.9,
+            }
+        }
+        self.modelTA_cfg = {
+            'encoder_depth': 5,
+            'encoder_weights': 'imagenet',
+            'decoder_use_batchnorm': True,
+            'decoder_channels': (256, 128, 64, 64),
+            'decoder_attention_type': 'scse',
+            'in_channels': 3,
+            'aux_params': {
+                'memory_bank': {
+                    'K': 100,
+                    'm': 0.9,
+                },
+                'min_ratio': 0.1,
+                'momentum': 0.9,
+            }
         }
         self.train = train
 
         # data config
-        root = '/media/ldy/7E1CA94545711AE6/OSCC/'
+        root = '/remote-home/share/ldy/OSCC/'
         train_root = root + '2.5x_tile/2.5x_640/'
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
@@ -36,7 +60,6 @@ class Config:
             "meta_file": train_root + "tile_info.json",
             "label": True,
         }
-
         with open(train_root+'train_coarse_fine.json', 'r') as f:
             fine_slide_list = json.load(f)['fine']
         self.fineset_cfg = {
@@ -48,6 +71,17 @@ class Config:
             "label": True,
         }
         self.crop_size = 513
+        # test set
+        with open(train_root+'train_coarse_fine.json', 'r') as f:
+            train_slide_list = json.load(f)['train']
+        self.testset_cfg = {
+            "slide_list": train_slide_list,
+            "img_dir": train_root +  "patch/",
+            "mask_dir": train_root +  "std_mask/",
+            "slide_mask_dir": root + "2.5x_mask/std_mask/",
+            "meta_file":train_root + "tile_info.json",
+            "label": True,
+        }
 
         # train config
         self.scheduler = 'poly' # ['cos', 'poly', 'step', 'ym']
@@ -56,15 +90,15 @@ class Config:
         self.warmup_epochs = 2
         self.batch_size = 12
         self.acc_step = 1
-        self.ckpt_path = None # pretrained model
+        self.ckpt_path = None
         if not train:
-            self.ckpt_path = 'results/saved_models/bapnet-bap-[11-09-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
+            self.ckpt_path = 'results/saved_models/bapnet-bap1-[11-13-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
         # loss config
-        self.loss = "ce" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap1" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -76,9 +110,10 @@ class Config:
             "focal": {
                 "gamma": 2,
             },
-            "bap": {
+            "bap1": {
                 "alpha": 1.0,
                 "beta": 1e-1,
+                "w": 0.5,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{
@@ -90,6 +125,7 @@ class Config:
             "bap2": {
                 "alpha": 1.0,
                 "beta": 1e-1,
+                "w": 0.5,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{
@@ -102,6 +138,7 @@ class Config:
 
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
+        # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
             self.task_name += "-" + "train"
         else:
@@ -111,10 +148,16 @@ class Config:
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
+        self.sim_output_path = out_root + 'sim/' + self.task_name
+        self.pseudo_output_path = out_root + 'pseudo/' + self.task_name
         self.coarse_output_path = out_root + "corse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
         # test cfg
-        self.testset_cfg = self.fineset_cfg
+        # self.testset_cfg = self.fineset_cfg
         self.test_output_path = out_root + "test predictions/" + self.task_name 
+        self.test_sim_path  = out_root + "test predictions/" + self.task_name +'/sim/'
+        self.test_pseudo_path  = out_root + "test predictions/" + self.task_name +'/pseudo/'
+
+
 

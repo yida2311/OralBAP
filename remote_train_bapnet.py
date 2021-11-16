@@ -30,12 +30,14 @@ from utils.util import seed_everything, argParser, update_writer
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
+os.environ['CUDA_VISIBLE_DEVICES'] = "2, 3, 4"
 SEED = 552
 seed_everything(SEED)
 
 distributed = False
-if torch.cuda.device_count() > 1:
-    distributed = True
+# if torch.cuda.device_count() > 1:
+#     distributed = True
 if distributed:
     # DPP 1
     dist.init_process_group('nccl')
@@ -480,7 +482,7 @@ def update_save_sim(sample, sims, save_dir):
 
 
 if __name__ == '__main__':
-    from configs.config_bapnet import Config
+    from configs.remote_config_bapnet import Config
 
     args = argParser()
     cfg = Config(train=True)
