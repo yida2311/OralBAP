@@ -13,6 +13,7 @@ class SegClsLoss(nn.Module):
     def __init__(self,
                 alpha = 1.0,
                 beta = 1e-2,
+                w = 0.5,
                 use_size_const = False,
                 use_curriculum = False,
                 aux_params: Optional[dict] = None,
@@ -29,6 +30,7 @@ class SegClsLoss(nn.Module):
         self.use_size_const = use_size_const
         self.use_curriculum = use_curriculum
         self.T = 120
+        self.w = 0
     
     def size_const(self, mask_pred):
         """"
@@ -57,9 +59,9 @@ class SegClsLoss(nn.Module):
         seg_term = self.seg_loss(seg_feat, seg_label)
         loss = seg_term
         if self.use_curriculum:
-            w = epoch/self.T*0.8 + 0.2
+            w = epoch/self.T*(1-self.w) + self.w
             gt_term = self.gt_loss(seg_feat, gt_label)
-            loss = (1-w) * gt_term + w * loss
+            loss = w * loss + (1-w) * gt_term
 
         cls_term = self.cls_loss(cls_feat, cls_label)
         loss = loss + self.alpha * cls_term
@@ -75,6 +77,7 @@ class SegClsLoss_v2(nn.Module):
     def __init__(self,
                 alpha = 1.0,
                 beta = 1e-2,
+                w = 0.5,
                 use_size_const = False,
                 use_curriculum = False,
                 aux_params: Optional[dict] = None,
@@ -91,6 +94,7 @@ class SegClsLoss_v2(nn.Module):
         self.use_size_const = use_size_const
         self.use_curriculum = use_curriculum
         self.T = 120 
+        self.w = 0
     
     def size_const(self, mask_pred):
         """"
@@ -123,7 +127,7 @@ class SegClsLoss_v2(nn.Module):
         loss = seg_term
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
-            w = epoch/self.T*0.8 + 0.1
+            w = epoch/self.T*(1-self.w) + self.w
             loss =  w* loss + (1-w) * gt_term
 
         cls_term = self.cls_loss(cls_feat, cls_label)

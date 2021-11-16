@@ -18,7 +18,7 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
-from models import BAPnet
+from models import BAPnet, BAPnetTA
 from utils.loss import CrossEntropyLoss, SegClsLoss, SegClsLoss_v2
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
@@ -67,7 +67,10 @@ def main(cfg, device, local_rank=0):
             os.makedirs(cfg.fine_output_path)
     
     ### MODEL INIT
-    model = BAPnet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+    if cfg.model == 'bapnet':
+        model = BAPnet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+    elif cfg.model == 'bapnetTA':
+        model = BAPnetTA(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.modelTA_cfg)
     if distributed:
         model = model_Single2Parallel(model, device, local_rank)
     else:
@@ -220,7 +223,6 @@ def main(cfg, device, local_rank=0):
         seg_metrics.reset()
         cls_metrics.reset()
         batch_time.reset() 
-        print(model.thresh)
 
         # sim in writer
         # train_info = dict(
@@ -251,6 +253,7 @@ def main(cfg, device, local_rank=0):
                                             (seg_scores_coarse["mIoU"], cls_scores_coarse['mF1'], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
+                    # break
                     
                 batch_time.reset()
                 seg_scores_coarse, cls_scores_coarse = evaluator.get_scores()
@@ -269,6 +272,7 @@ def main(cfg, device, local_rank=0):
                                             (seg_scores_fine["mIoU"], cls_scores_fine['mF1'], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
+                    # break
                     
                 batch_time.reset()
                 seg_scores_fine, cls_scores_fine = evaluator.get_scores()
@@ -289,6 +293,7 @@ def main(cfg, device, local_rank=0):
                 writer_info.update(
                         # lr=optimizer.param_groups[0]['lr'],
                         thresh=thresh,
+                        loss=train_loss/len(tbar),
                         train_mIoU=seg_scores_train['mIoU'],
                         coarse_mIoU=seg_scores_coarse['mIoU'],
                         fine_mIoU=seg_scores_fine['mIoU'], 
@@ -312,13 +317,13 @@ def main(cfg, device, local_rank=0):
                 pred_rgb = evaluator.inference(dataset_coarse, model, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.coarse_output_path, dataset_coarse.slide+'.png'), pred_rgb)
-
+                # break
             num_slides = len(dataset_fine.slides)
             for i in range(num_slides):
                 pred_rgb = evaluator.inference(dataset_fine, model, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.fine_output_path, dataset_fine.slide+'.png'), pred_rgb)
-                
+                # break
 
               
 class SlideInference(object):
@@ -329,7 +334,6 @@ class SlideInference(object):
         self.seg_metrics = ConfusionMatrix(n_class)
         self.cls_metrics = ConfusionMatrix(n_class)
     
-
     def get_scores(self):
         seg_scores = self.seg_metrics.get_scores()
         cls_scores = self.cls_metrics.get_scores()
@@ -362,7 +366,6 @@ class SlideInference(object):
             self.cls_metrics.update(cls_label, cls_predictions)
 
             _, _, h, w = seg_preds_np.shape
-
             for i in range(imgs.shape[0]):
                 x = math.floor(coord[0][i] * step[0])
                 y = math.floor(coord[1][i] * step[1])
@@ -372,7 +375,6 @@ class SlideInference(object):
         template[template==0] = 1
         output = output / template
         prediction = np.argmax(output, axis=0)
-
         slide_mask = dataset.get_slide_mask_from_index(inds)
         self.seg_metrics.update(slide_mask, prediction)
 
@@ -395,7 +397,6 @@ class SlideInference(object):
                 preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 preds_np = preds.cpu().detach().numpy()
             _, _, h, w = preds_np.shape
-
             for i in range(imgs.shape[0]):
                 x = math.floor(coord[0][i] * step[0])
                 y = math.floor(coord[1][i] * step[1])
@@ -478,16 +479,16 @@ def update_save_sim(sample, sims, save_dir):
         cv2.imwrite(sim_path, sim)
 
 
-
-
 if __name__ == '__main__':
     from configs.config_bapnet import Config
 
-    cfg = Config(train=True)
     args = argParser()
+    cfg = Config(train=True)
     main(cfg, device, local_rank=local_rank)
 
-    # threshs = [1.0, 0.8, 0.6, 0.4]
-    # for th in threshs:
-    #     cfg.model_cfg['aux_params']['pseudo_mask']['high_thresh'] = th
+    # w_list = [0, 0.5, 1]
+    # for w in w_list:
+    #     cfg = Config(train=True)
+    #     cfg.loss_cfg[cfg.loss]['w'] = w
     #     main(cfg, device, local_rank=local_rank)
+    

@@ -2,14 +2,14 @@ import random
 from typing import Optional, Union, List
 import torch
 from torch import nn
-from torch._C import dtype
 import torch.nn.functional as F
 from segmentation_models_pytorch.encoders import get_encoder
 from segmentation_models_pytorch.base import SegmentationHead, SegmentationModel, ClassificationHead
+import segmentation_models_pytorch.base.initialization as init
 
-from .decoder import BAPnetDecoder
+from .encoder import BAPnetDecoder, BAPnetEncoder
 
-class BAPnet(SegmentationModel):
+class BAPnetTA(SegmentationModel):
     def __init__(
         self,
         encoder_name: str = "resnet34",
@@ -24,22 +24,28 @@ class BAPnet(SegmentationModel):
         aux_params: Optional[dict] = None,
     ):
         super().__init__()
-        self.encoder = get_encoder(
+        self.encoder_q = BAPnetEncoder(
             encoder_name,
             in_channels=in_channels, # 3
-            depth=encoder_depth,
-            weights=encoder_weights,
-        )
-
-        self.decoder = BAPnetDecoder(
-            encoder_channels=self.encoder.out_channels,  # [3,64,64,128,256,512]
-            decoder_channels=decoder_channels, # [256, 128, 64, 64]
-            n_blocks=encoder_depth-1, # 4
+            encoder_depth=encoder_depth,
+            encoder_weights=encoder_weights,
+            center=True,
             use_batchnorm=decoder_use_batchnorm,
-            center=True, # attention\conv\Identity
             attention_type=decoder_attention_type,
         )
-
+        self.encoder_k = BAPnetEncoder(
+            encoder_name,
+            in_channels=in_channels, # 3
+            encoder_depth=encoder_depth,
+            encoder_weights=encoder_weights,
+            center=True,
+            use_batchnorm=decoder_use_batchnorm,
+            attention_type=decoder_attention_type,
+        )
+        self.decoder = BAPnetDecoder(
+            use_batchnorm=decoder_use_batchnorm,
+            attention_type=decoder_attention_type,
+        )
         self.segmentation_head = SegmentationHead(
             in_channels=decoder_channels[-1], # 64
             out_channels=classes,
@@ -54,8 +60,7 @@ class BAPnet(SegmentationModel):
         self.register_buffer("thresh", torch.zeros(1, dtype=torch.float))
         # create Background Memory Banck
         self.K = aux_params['memory_bank']['K']  # 1000
-        self.T = aux_params['memory_bank']['T']  # 100
-        self.item = 1  # [normal, mucosa, tumor]
+        self.m = aux_params['memory_bank']['m']
         self.register_buffer("queue", torch.randn(self.dim, self.K))
         self.queue = F.normalize(self.queue, dim=0)
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
@@ -63,7 +68,24 @@ class BAPnet(SegmentationModel):
         self.n_class = classes
         self.name = "bap-{}".format(encoder_name)
         self.initialize()
+
+        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+            param_k.data.copy_(param_q.data) # initialize
+            param_k.requires_grad = False
     
+    def initialize(self):
+        init.initialize_head(self.segmentation_head)
+        init.initialize_head(self.classification_head)
+        init.initialize_decoder(self.encoder_q.center)
+        init.initialize_decoder(self.encoder_q.decoder_block_1)
+        init.initialize_decoder(self.encoder_q.decoder_block_2)
+        init.initialize_decoder(self.encoder_q.proto_block)
+
+    @torch.no_grad()
+    def _momentum_update_key_encoder(self):
+        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+            param_k.data = param_k.data * self.m + param_q.data * (1 - self.m)
+
     @torch.no_grad()
     def _dequeue_and_enqueue(self, keys):
         " keys: batch_size x dim "
@@ -79,7 +101,17 @@ class BAPnet(SegmentationModel):
 
         ptr = (ptr + batch_size) % self.K  # move pointer
         self.queue_ptr[0] = ptr
+    
+    def background_prototype_generation(self, feature, mask):
+        n, c, h, w = feature.size()
+        mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        bg_mask = mask == 1
+        area = torch.sum(bg_mask, dim=(1,2)).float()
+        digit = torch.sum(feature*bg_mask.unsqueeze(1), dim=(2,3)) / (area.unsqueeze(1)+1) # N x 256
+        ratio = area / (h*w)
+        proto = F.normalize(digit[ratio>self.min_ratio], dim=1)
 
+        return proto
 
     def prototype_generation(self, feature, sim, mask):
         """
@@ -91,7 +123,7 @@ class BAPnet(SegmentationModel):
             return:
                 digit: 4N x 256
                 label: 4N
-                proto: [M1 x 256, M2 x 256, M3 x 256]
+                proto: M x 256
         """
         ## mask operation
         n, c, h, w = feature.size()
@@ -109,11 +141,11 @@ class BAPnet(SegmentationModel):
         area = torch.sum(mask, dim=(2,3)) # N x 4
         ratio = area / (h*w)
         label[ratio<self.min_ratio] = -1
-        proto = F.normalize(digit[:,1,:][label[:,1]==1], dim=1)
+        # proto = F.normalize(digit[:,1,:][label[:,1]==1], dim=1)
         digit = digit.view(-1, c)
         label = label.view(-1)
 
-        return digit, label, proto
+        return digit, label
     
     def prototype_selection(self):
         inds = list(range(self.K))
@@ -166,40 +198,54 @@ class BAPnet(SegmentationModel):
         
     def forward(self, img, mask):
         _, H, W = mask.size()
-        encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
-        seg_feat, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
-        # proto selection for similarity calculation
-        proto = self.prototype_selection() #  100 x 256
+        # query forward
+        encoder_feats, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
+        seg_feat = self.decoder(*encoder_feats) # x2[64]
+        # key forward
+        with torch.no_grad():
+            self._momentum_update_key_encoder()
+            feat_k = self.encoder_k.get_proto(img) # x8[256]
+            proto_k = self.background_prototype_generation(feat_k, mask) # M x 256
+        # # proto selection for similarity calculation
+        # proto = self.prototype_selection() #  100 x 256
+        # bg proto construction
+        proto = torch.cat([proto_k.T, self.queue], dim=1) # (M+K) x 256
         # similarity calculation
-        sim = self.similarity_calculation(feat, proto) # n x h x w
-        # pseudo mask generation
+        sim = self.similarity_calculation(feat_q, proto) # n x h x w
+        # pseudo mask generation for segmentation
         seg_label = self.pseudo_mask_generation(sim, mask)
-        # prototype generation
-        digit, cls_label, new_proto = self.prototype_generation(feat, sim, mask) # nx4x256, nx4
-        self._dequeue_and_enqueue(new_proto)
+        # classification digit & label generation
+        digit, cls_label = self.prototype_generation(feat_q, sim, mask) # nx4x256, nx4
         # sgementation head
         seg_feat = self.segmentation_head(seg_feat)
         # linear classifier
         cls_feat = self.classification_head(digit)
+
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
-        
+        self._dequeue_and_enqueue(proto_k)
+
         return seg_feat, seg_label, cls_feat, cls_label, sim
 
     def inference(self, img):
-        encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
-        seg_feat, _ = self.decoder(*encoder_feats) # x2[64], x16[256] 
+        encoder_feats, _ = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
+        seg_feat = self.decoder(*encoder_feats) # x2[64]
         seg_feat = self.segmentation_head(seg_feat)
         
         return seg_feat
     
     def get_similarity_map(self, img, mask):
         _, H, W = mask.size()
-        encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
-        _, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
-        # proto selection for similarity calculation
-        proto = self.prototype_selection() # 100 x 256
+        # query forward
+        _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
+        # key forward
+        with torch.no_grad():
+            self._momentum_update_key_encoder()
+            feat_k = self.encoder_k.get_proto(img) # x8[256]
+            proto_k = self.background_prototype_generation(feat_k) # M x 256
+        # bg proto construction
+        proto = torch.cat([proto_k.T, self.queue.T], dim=1) # (M+K) x 256
         # similarity calculation
-        sim = self.similarity_calculation(feat, proto) # n x h x w
+        sim = self.similarity_calculation(feat_q, proto) # n x h x w
         # pseudo mask generation
         pseudo = self.pseudo_mask_generation(sim, mask)
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)

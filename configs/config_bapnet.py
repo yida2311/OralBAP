@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "bapnet"
+        self.model = "bapnetTA"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -18,6 +18,22 @@ class Config:
                 'memory_bank': {
                     'K': 1000,
                     'T': 100
+                },
+                'min_ratio': 0.1,
+                'momentum': 0.9,
+            }
+        }
+        self.modelTA_cfg = {
+            'encoder_depth': 5,
+            'encoder_weights': 'imagenet',
+            'decoder_use_batchnorm': True,
+            'decoder_channels': (256, 128, 64, 64),
+            'decoder_attention_type': 'scse',
+            'in_channels': 3,
+            'aux_params': {
+                'memory_bank': {
+                    'K': 100,
+                    'm': 0.9,
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
@@ -44,7 +60,6 @@ class Config:
             "meta_file": train_root + "tile_info.json",
             "label": True,
         }
-
         with open(train_root+'train_coarse_fine.json', 'r') as f:
             fine_slide_list = json.load(f)['fine']
         self.fineset_cfg = {
@@ -56,7 +71,6 @@ class Config:
             "label": True,
         }
         self.crop_size = 513
-
         # test set
         with open(root+'train_coarse_fine.json', 'r') as f:
             train_slide_list = json.load(f)['train']
@@ -74,7 +88,7 @@ class Config:
         self.lr = 1e-4
         self.num_epochs = 120
         self.warmup_epochs = 2
-        self.batch_size = 12
+        self.batch_size = 2
         self.acc_step = 1
         self.ckpt_path = None
         if not train:
@@ -99,6 +113,7 @@ class Config:
             "bap1": {
                 "alpha": 1.0,
                 "beta": 1e-1,
+                "w": 0.5,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{
@@ -110,6 +125,7 @@ class Config:
             "bap2": {
                 "alpha": 1.0,
                 "beta": 1e-1,
+                "w": 0.5,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{
