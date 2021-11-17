@@ -98,7 +98,7 @@ class Config:
         self.val_vis = True # val result visualization
 
         # loss config
-        self.loss = "bap1" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -113,7 +113,7 @@ class Config:
             "bap1": {
                 "alpha": 1.0,
                 "beta": 1e-1,
-                "w": 0.5,
+                "w": 1.0,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{
@@ -125,7 +125,7 @@ class Config:
             "bap2": {
                 "alpha": 1.0,
                 "beta": 1e-1,
-                "w": 0.5,
+                "w": 1.0,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{

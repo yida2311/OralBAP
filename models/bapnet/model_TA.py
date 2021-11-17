@@ -109,9 +109,10 @@ class BAPnetTA(SegmentationModel):
         area = torch.sum(bg_mask, dim=(1,2)).float()
         digit = torch.sum(feature*bg_mask.unsqueeze(1), dim=(2,3)) / (area.unsqueeze(1)+1) # N x 256
         ratio = area / (h*w)
-        proto = F.normalize(digit[ratio>self.min_ratio], dim=1)
+        proto_state = ratio>self.min_ratio
+        proto = F.normalize(digit[proto_state], dim=1)
 
-        return proto
+        return proto, proto_state
 
     def prototype_generation(self, feature, sim, mask):
         """
@@ -154,22 +155,42 @@ class BAPnetTA(SegmentationModel):
         proto = self.queue[:, inds]
 
         return proto  # [256 x 100]
+    
+    def similarity_weight(self, proto, proto_k, proto_k_state):
+        """
+         proto: (256 x (M+K)
+         proto_k: M x 256
+         proto_k_state: N
 
-    def similarity_calculation(self, feature, proto):
+         return:
+            weight: N x (M+K)
+        """
+        _, k = proto.size()
+        m, _ = proto_k.size()
+        n = proto_k_state.size(0)
+        weight = torch.ones((n, k), dtype=torch.float).cuda() 
+        weight[proto_k_state] = proto_k * proto_k_state
+        weight = F.normalize(weight, dim=1)
+
+        return weight
+
+    def similarity_calculation(self, feature, proto, weight):
         """
             feature: N x 256 x h x w
             proto: 256 x k
-            mask: N x H x W
+            weight: N x k
             return:
-                sim: N x 3 x h x w
+                sim: N x h x w
         """
         n, c, h, w = feature.size()
+        k = proto.size(1)
         # normalize
         feature = F.normalize(feature, dim=1)
         # similarity matrix
         feature = feature.permute(0, 2, 3, 1).contiguous().view(-1, c)  # (Nhw) x 256
         sim = F.relu(torch.mm(feature, proto))  # (Nhw) x k
-        sim = torch.mean(sim, dim=1).view(n, h, w)
+        sim = sim.view(n, h, w, k).permute(0, 3, 1, 2).contiguous() * weight.unsqueeze(2).unsqueeze(3) # N x k x h x w
+        sim = torch.sum(sim, dim=1)
 
         return sim.detach()
     
@@ -205,13 +226,15 @@ class BAPnetTA(SegmentationModel):
         with torch.no_grad():
             self._momentum_update_key_encoder()
             feat_k = self.encoder_k.get_proto(img) # x8[256]
-            proto_k = self.background_prototype_generation(feat_k, mask) # M x 256
+            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
         # # proto selection for similarity calculation
         # proto = self.prototype_selection() #  100 x 256
         # bg proto construction
-        proto = torch.cat([proto_k.T, self.queue], dim=1) # (M+K) x 256
+        proto = torch.cat([proto_k.T, self.queue], dim=1) # 256 x (M+K) 
+        # similarity map weight
+        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim = self.similarity_calculation(feat_q, proto) # n x h x w
+        sim = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
         # pseudo mask generation for segmentation
         seg_label = self.pseudo_mask_generation(sim, mask)
         # classification digit & label generation
