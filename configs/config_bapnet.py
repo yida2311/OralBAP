@@ -88,7 +88,7 @@ class Config:
         self.lr = 1e-4
         self.num_epochs = 120
         self.warmup_epochs = 2
-        self.batch_size = 2
+        self.batch_size = 12
         self.acc_step = 1
         self.ckpt_path = None
         if not train:
@@ -113,7 +113,7 @@ class Config:
             "bap1": {
                 "alpha": 1.0,
                 "beta": 1e-1,
-                "w": 0.5,
+                "w": 1.0,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "aux_params":{

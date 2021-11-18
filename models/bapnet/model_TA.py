@@ -169,8 +169,8 @@ class BAPnetTA(SegmentationModel):
         m, _ = proto_k.size()
         n = proto_k_state.size(0)
         weight = torch.ones((n, k), dtype=torch.float).cuda() 
-        weight[proto_k_state] = proto_k * proto_k_state
-        weight = F.normalize(weight, dim=1)
+        weight[proto_k_state] = torch.mm(proto_k, proto)
+        weight = F.softmax(weight, dim=1)
 
         return weight
 

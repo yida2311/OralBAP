@@ -217,8 +217,8 @@ def main(cfg, device, local_rank=0):
             batch_time.update(time.time()-start_time)
             start_time = time.time()
             if i_batch % 50 == 1 and local_rank == 0:
-                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f' % 
-                            (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], batch_time.avg))
+                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; thresh: %.2f batch time: %.2f' % 
+                            (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], model.thresh.cpu().item(), batch_time.avg))
             # break
         seg_metrics.reset()
         cls_metrics.reset()
