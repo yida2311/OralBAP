@@ -37,11 +37,11 @@ class SegClsLoss(nn.Module):
         Compute the loss over the size of the mask.
         :param mask_pred: foreground predicted mask, shape: (n, 1, h, w)
         """
-        assert mask_pred.ndim == 4
+        assert mask_pred.ndim == 3
 
         # background
         bgmask = 1 - mask_pred
-        bs, _, h, w = mask_pred.size()
+        bs, h, w = mask_pred.size()
         l1_bg = torch.abs(bgmask.contiguous().view(bs, -1)).sum(dim=1)
         l1_bg = l1_bg / float(h*w)
         loss_bg = self.elb_loss(-l1_bg)
@@ -67,7 +67,7 @@ class SegClsLoss(nn.Module):
         loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
-            elb_term = self.elb_loss(seg_feat)
+            elb_term = self.size_const(1-sim)
             loss += self.beta * elb_term
         
         return loss
@@ -80,11 +80,12 @@ class SegClsLoss_v2(nn.Module):
                 w = 0.5,
                 use_size_const = False,
                 use_curriculum = False,
+                sim_norm = False,
                 aux_params: Optional[dict] = None,
                 ):
         super(SegClsLoss_v2, self).__init__()
         self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        self.seg_loss = _WeightedCELoss()
+        self.seg_loss = _WeightedCELoss(sim_norm=sim_norm)
         self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
@@ -92,6 +93,10 @@ class SegClsLoss_v2(nn.Module):
         self.alpha = alpha
         self.beta = beta
         self.use_size_const = use_size_const
+        self.init_t = aux_params['init_t']
+        self.max_t = aux_params['max_t']
+        self.sim_norm = sim_norm
+        self.epsilon = 0
         self.use_curriculum = use_curriculum
         self.T = 120 
         self.w = 0
@@ -101,17 +106,19 @@ class SegClsLoss_v2(nn.Module):
         Compute the loss over the size of the mask.
         :param mask_pred: foreground predicted mask, shape: (n, 1, h, w)
         """
-        assert mask_pred.ndim == 4
+        assert mask_pred.ndim == 3
 
         # background
         bgmask = 1 - mask_pred
-        bs, _, h, w = mask_pred.size()
+        bs, h, w = mask_pred.size()
         l1_bg = torch.abs(bgmask.contiguous().view(bs, -1)).sum(dim=1)
-        l1_bg = l1_bg / float(h*w)
+        l1_bg = l1_bg / float(h*w) 
+        l1_bg = l1_bg - self.epsilon
         loss_bg = self.elb_loss(-l1_bg)
-
+        # foreground
         l1_fg = torch.abs(mask_pred.contiguous().view(bs, -1)).sum(dim=1)
         l1_fg = l1_fg / float(h*w)
+        l1_fg = l1_fg - self.epsilon
         loss_fg = self.elb_loss(-l1_fg)
 
         loss = loss_bg + loss_fg
@@ -134,18 +141,23 @@ class SegClsLoss_v2(nn.Module):
         loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
-            elb_term = self.elb_loss(seg_feat)
+            elb_term = self.size_const(1-sim)
             loss += self.beta * elb_term
         
         return loss
 
 
 class _WeightedCELoss(nn.Module):
-    def __init__(self):
+    def __init__(self, sim_norm=False):
         super(_WeightedCELoss, self).__init__()
         self.ce = CrossEntropyLoss(ignore_index=-1, reduction='none')
+        self.sim_norm = sim_norm
     
     def forward(self, input, label, weight):
+        if self.sim_norm:
+            for i in range(4):
+                weight[label==i] /= torch.sum(weight[label==i]) + 1e-1
+            weight *= (torch.sum(weight, dim=(0,1,2))/3)
         loss = self.ce(input, label)
         loss = torch.mean(loss*weight, dim=(0,1,2))
 
@@ -198,7 +210,6 @@ class _ExtendedLBLoss(nn.Module):
 
         # vals <= -1/(self.t_lb**2)
         ct = - (1. / (self.t_lb**2))
-
         idx_less = (fx <= ct).nonzero().squeeze()
         if idx_less.numel() > 0:
             val_less = fx[idx_less]

@@ -31,7 +31,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "5"
+os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 SEED = 552
 seed_everything(SEED)
 
@@ -124,6 +124,7 @@ def main(cfg, device, local_rank=0):
     elif cfg.loss == 'bap2':
         print("BAP V2 Loss")
         criterion = SegClsLoss_v2(**cfg.loss_cfg[cfg.loss])
+    criterion = criterion.cuda()
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
     num_epochs = cfg.num_epochs

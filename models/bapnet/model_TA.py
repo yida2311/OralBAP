@@ -57,6 +57,8 @@ class BAPnetTA(SegmentationModel):
         
         self.min_ratio = aux_params['min_ratio']
         self.momentum = aux_params['momentum']
+        self.temperature = aux_params['temperature']
+        self.weight_type = aux_params['weight_type']
         self.register_buffer("thresh", torch.zeros(1, dtype=torch.float))
         # create Background Memory Banck
         self.K = aux_params['memory_bank']['K']  # 1000
@@ -168,9 +170,14 @@ class BAPnetTA(SegmentationModel):
         _, k = proto.size()
         m, _ = proto_k.size()
         n = proto_k_state.size(0)
-        weight = torch.ones((n, k), dtype=torch.float).cuda() 
+        weight = torch.ones((n, k), dtype=torch.float).cuda()
         weight[proto_k_state] = torch.mm(proto_k, proto)
-        weight = F.softmax(weight, dim=1)
+        if self.weight_type == 'softmax':
+            weight = F.softmax(weight/self.temperature, dim=1)
+        elif self.weight_type == 'weighted':
+            weight = weight / torch.sum(weight, dim=1).unsqueeze(1)
+        elif self.weight_type == 'mean':
+            weight = torch.ones((n, k), dtype=torch.float).cuda() / k
 
         return weight
 

@@ -37,9 +37,51 @@ class Config:
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
+                'temperature': 1,
+                'weight_type': 'mean',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
+
+        # loss config
+        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
+        self.loss_cfg = {
+            "sce": {
+                "alpha": 1.0,
+                "beta": 1.0,
+            },
+            "ce-dice": {
+                "alpha": 0.1,
+            },
+            "focal": {
+                "gamma": 2,
+            },
+            "bap1": {
+                "alpha": 1.0,
+                "beta": 1.0,
+                "w": 1.0,
+                "use_size_const": False,
+                "use_curriculum": True,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
+            },
+            "bap2": {
+                "alpha": 1.0,
+                "beta": 1.0,
+                "w": 1.0,
+                "use_size_const": True,
+                "use_curriculum": True,
+                'sim_norm': False,
+                "aux_params":{
+                    "init_t": 5.0,
+                    "max_t": 10.0,
+                    "mulcoef": 1.01,
+                },
+            },
+        }
 
         # data config
         root = '/remote-home/share/ldy/OSCC/'
@@ -97,44 +139,6 @@ class Config:
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
-        # loss config
-        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
-        self.loss_cfg = {
-            "sce": {
-                "alpha": 1.0,
-                "beta": 1.0,
-            },
-            "ce-dice": {
-                "alpha": 0.1,
-            },
-            "focal": {
-                "gamma": 2,
-            },
-            "bap1": {
-                "alpha": 1.0,
-                "beta": 1e-1,
-                "w": 1.0,
-                "use_size_const": False,
-                "use_curriculum": True,
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
-            },
-            "bap2": {
-                "alpha": 1.0,
-                "beta": 1e-1,
-                "w": 1.0,
-                "use_size_const": False,
-                "use_curriculum": True,
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
-            },
-        }
 
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
