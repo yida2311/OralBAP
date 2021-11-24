@@ -32,13 +32,14 @@ class Config:
             'in_channels': 3,
             'aux_params': {
                 'memory_bank': {
-                    'K': 100,
+                    'K': 1000,
+                    'T': 100,
                     'm': 0.9,
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
                 'temperature': 1,
-                'weight_type': 'mean',  # 'softmax', 'weighted', 'mean'
+                'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
@@ -60,7 +61,7 @@ class Config:
                 "alpha": 1.0,
                 "beta": 1.0,
                 "w": 1.0,
-                "use_size_const": False,
+                "use_size_const": True,
                 "use_curriculum": True,
                 "aux_params":{
                     "init_t": 5.0,

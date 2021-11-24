@@ -62,6 +62,7 @@ class BAPnetTA(SegmentationModel):
         self.register_buffer("thresh", torch.zeros(1, dtype=torch.float))
         # create Background Memory Banck
         self.K = aux_params['memory_bank']['K']  # 1000
+        self.T = aux_params['memory_bank']['T'] 
         self.m = aux_params['memory_bank']['m']
         self.register_buffer("queue", torch.randn(self.dim, self.K))
         self.queue = F.normalize(self.queue, dim=0)
@@ -235,9 +236,9 @@ class BAPnetTA(SegmentationModel):
             feat_k = self.encoder_k.get_proto(img) # x8[256]
             proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
         # # proto selection for similarity calculation
-        # proto = self.prototype_selection() #  100 x 256
+        proto = self.prototype_selection() #  100 x 256
         # bg proto construction
-        proto = torch.cat([proto_k.T, self.queue], dim=1) # 256 x (M+K) 
+        # proto = torch.cat([proto_k.T, self.queue], dim=1) # 256 x (M+K) 
         # similarity map weight
         sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
