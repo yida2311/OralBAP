@@ -132,9 +132,13 @@ class BAPnetTA(SegmentationModel):
         ## mask operation
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        # sim rectify
+        sim[mask==1] = 1
+        sim[mask!=1] = 1 - sim[mask!=1]
+        # one hot
         mask = one_hot(mask, self.n_class) # N x 4 x h x w
         ## reweighting
-        weighted_feat = feature * (1-sim.unsqueeze(1))
+        weighted_feat = feature * (sim.unsqueeze(1))
         digit = weighted_feat.unsqueeze(1) * mask.unsqueeze(2)  # N x 4 x 256 x h x w
         # GAP
         weight = torch.sum(mask*sim.unsqueeze(1), dim=(2,3))

@@ -35,9 +35,11 @@ class BAPnetEncoder(nn.Module):
         self.decoder_block_2 = DecoderBlock(256, 128, 128, **kwargs)
         self.proto_block = nn.Sequential(
             nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
             nn.ReLU(),
             nn.Dropout2d(0.5),
             nn.Conv2d(in_channels=256, out_channels=256, kernel_size=1, stride=1, padding=0),
+            nn.BatchNorm2d(256),
             nn.ReLU(),
             nn.Dropout2d(0.5),
         )
