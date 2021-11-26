@@ -38,7 +38,7 @@ class Config:
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
-                'temperature': 1,
+                'temperature': 0.3,
                 'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
             }
         }

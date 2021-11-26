@@ -221,10 +221,15 @@ class BAPnetTA(SegmentationModel):
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         bg_mask = (mask == 1)
         fg_mask = (mask != 1)
-        bg_sim = sim[bg_mask]
-        thresh = bg_sim.sum() / bg_mask.sum()
+        bg_sim = sim * bg_mask
+
+        threshs = torch.sum(bg_sim, dim=(1,2)) / (torch.sum(bg_mask, dim=(1,2))+1e-1)  # N
+        thresh = threshs.mean()
         self.thresh = (1-self.momentum) * thresh + self.momentum * self.thresh
-        noise_mask = (sim > self.thresh) & fg_mask
+        ratio = torch.sum(bg_mask, dim=(1,2)) / (H*W)
+        threshs[ratio<self.min_ratio] = self.thresh
+
+        noise_mask = (sim > threshs.unsqueeze(1).unsqueeze(2)) & fg_mask
         pseudo[noise_mask] = 1  # modify to normal
 
         return pseudo
