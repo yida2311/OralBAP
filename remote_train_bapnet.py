@@ -19,7 +19,7 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
 from models import BAPnet, BAPnetTA
-from utils.loss import CrossEntropyLoss, SegClsLoss, SegClsLoss_v2
+from utils.loss import CrossEntropyLoss, SegClsLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
@@ -31,7 +31,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "6"
+os.environ['CUDA_VISIBLE_DEVICES'] = "4"
 SEED = 552
 seed_everything(SEED)
 
@@ -50,7 +50,6 @@ else:
     device = torch.device("cuda:0")
     local_rank = 0
     
-
 
 def main(cfg, device, local_rank=0):
     print(cfg.task_name)
@@ -119,11 +118,9 @@ def main(cfg, device, local_rank=0):
     # loss_cfg = cfg.loss_cfg[cfg.loss]
     if cfg.loss == "ce":
         criterion = nn.CrossEntropyLoss(reduction='mean')
-    elif cfg.loss == "bap1":
+    elif cfg.loss == "bap":
+        print("BAP Loss")
         criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
-    elif cfg.loss == 'bap2':
-        print("BAP V2 Loss")
-        criterion = SegClsLoss_v2(**cfg.loss_cfg[cfg.loss])
     criterion = criterion.cuda()
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation

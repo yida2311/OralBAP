@@ -279,13 +279,14 @@ class BAPnetTA(SegmentationModel):
         _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
         # key forward
         with torch.no_grad():
-            self._momentum_update_key_encoder()
             feat_k = self.encoder_k.get_proto(img) # x8[256]
-            proto_k = self.background_prototype_generation(feat_k) # M x 256
+            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
         # bg proto construction
-        proto = torch.cat([proto_k.T, self.queue.T], dim=1) # (M+K) x 256
+        proto = self.prototype_selection() # 100 x 256
+        # similarity map weight
+        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim = self.similarity_calculation(feat_q, proto) # n x h x w
+        sim = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
         # pseudo mask generation
         pseudo = self.pseudo_mask_generation(sim, mask)
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)

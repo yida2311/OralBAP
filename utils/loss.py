@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import torch
 from typing import Optional
 
-__all__ = ['SegClsLoss', 'SegClsLoss_v2', 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
+__all__ = ['SegClsLoss', 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
             'FocalLoss', 'SoftCrossEntropyLoss2d']
 
 
@@ -16,76 +16,16 @@ class SegClsLoss(nn.Module):
                 w = 0.5,
                 use_size_const = False,
                 use_curriculum = False,
+                sim_weight = True,
+                sim_norm = False,
                 aux_params: Optional[dict] = None,
                 ):
         super(SegClsLoss, self).__init__()
         self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        if use_size_const:
-            self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
-
-        self.alpha = alpha
-        self.beta = beta
-        self.use_size_const = use_size_const
-        self.use_curriculum = use_curriculum
-        self.T = 120
-        self.w = 0
-    
-    def size_const(self, mask_pred):
-        """"
-        Compute the loss over the size of the mask.
-        :param mask_pred: foreground predicted mask, shape: (n, 1, h, w)
-        """
-        assert mask_pred.ndim == 3
-
-        # background
-        bgmask = 1 - mask_pred
-        bs, h, w = mask_pred.size()
-        l1_bg = torch.abs(bgmask.contiguous().view(bs, -1)).sum(dim=1)
-        l1_bg = l1_bg / float(h*w)
-        loss_bg = self.elb_loss(-l1_bg)
-
-        l1_fg = torch.abs(mask_pred.contiguous().view(bs, -1)).sum(dim=1)
-        l1_fg = l1_fg / float(h*w)
-        loss_fg = self.elb_loss(-l1_fg)
-
-        loss = loss_bg + loss_fg
-
-        return loss
-
-    
-    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim, gt_label, epoch):
-        seg_term = self.seg_loss(seg_feat, seg_label)
-        loss = seg_term
-        if self.use_curriculum:
-            w = epoch/self.T*(1-self.w) + self.w
-            gt_term = self.gt_loss(seg_feat, gt_label)
-            loss = w * loss + (1-w) * gt_term
-
-        cls_term = self.cls_loss(cls_feat, cls_label)
-        loss = loss + self.alpha * cls_term
-
-        if self.use_size_const:
-            elb_term = self.size_const(1-sim)
-            loss += self.beta * elb_term
-        
-        return loss
-
-
-class SegClsLoss_v2(nn.Module):
-    def __init__(self,
-                alpha = 1.0,
-                beta = 1e-2,
-                w = 0.5,
-                use_size_const = False,
-                use_curriculum = False,
-                sim_norm = False,
-                aux_params: Optional[dict] = None,
-                ):
-        super(SegClsLoss_v2, self).__init__()
-        self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        self.seg_loss = _WeightedCELoss(sim_norm=sim_norm)
+        if sim_weight:
+            self.seg_loss = _WeightedCELoss(sim_norm=sim_norm)
+        else:
+            self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
@@ -95,6 +35,7 @@ class SegClsLoss_v2(nn.Module):
         self.use_size_const = use_size_const
         self.init_t = aux_params['init_t']
         self.max_t = aux_params['max_t']
+        self.sim_weight = sim_weight
         self.sim_norm = sim_norm
         self.epsilon = 0
         self.use_curriculum = use_curriculum
@@ -130,8 +71,12 @@ class SegClsLoss_v2(nn.Module):
         weight = sim.clone().detach()
         weight[gt_label==1] = 1
         weight[seg_label!=1] = 1 - weight[seg_label!=1]
-        seg_term = self.seg_loss(seg_feat, seg_label, weight)
+        if self.sim_weight:
+            seg_term = self.seg_loss(seg_feat, seg_label, weight)
+        else:
+            seg_term = self.seg_loss(seg_feat, seg_label)
         loss = seg_term
+
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
             w = epoch/self.T*(1-self.w) + self.w
@@ -156,7 +101,8 @@ class _WeightedCELoss(nn.Module):
     def forward(self, input, label, weight):
         if self.sim_norm:
             for i in range(4):
-                weight[label==i] /= torch.sum(weight[label==i]) + 1e-1
+                mask = label == i
+                weight[mask] /= torch.sum(weight[mask]) + 1e-1
             weight *= (torch.sum(weight, dim=(0,1,2))/3)
         loss = self.ce(input, label)
         loss = torch.mean(loss*weight, dim=(0,1,2))

@@ -38,14 +38,14 @@ class Config:
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
-                'temperature': 0.3,
-                'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
+                'temperature': 0.1,
+                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
 
         # loss config
-        self.loss = "bap2" # ["ce", "sce", 'ce-dice]
+        self.loss = "bap" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -57,25 +57,14 @@ class Config:
             "focal": {
                 "gamma": 2,
             },
-            "bap1": {
+            "bap": {
                 "alpha": 1.0,
                 "beta": 1.0,
                 "w": 1.0,
                 "use_size_const": True,
                 "use_curriculum": True,
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
-            },
-            "bap2": {
-                "alpha": 1.0,
-                "beta": 1.0,
-                "w": 1.0,
-                "use_size_const": True,
-                "use_curriculum": True,
-                'sim_norm': False,
+                "sim_weight": True,
+                'sim_norm': True,
                 "aux_params":{
                     "init_t": 5.0,
                     "max_t": 10.0,
@@ -83,6 +72,14 @@ class Config:
                 },
             },
         }
+
+        # task name
+        self.task_name = "-".join([self.model, self.loss, simple_time()])
+        # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
+        if train:
+            self.task_name += "-" + "train-10"
+        else:
+            self.task_name += "-" + "test"
 
         # data config
         root = '/remote-home/share/ldy/OSCC/'
@@ -140,16 +137,8 @@ class Config:
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
-
-        # task name
-        self.task_name = "-".join([self.model, self.loss, simple_time()])
-        # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
-        if train:
-            self.task_name += "-" + "train"
-        else:
-            self.task_name += "-" + "test"
         # output config
-        out_root = "results/"
+        out_root = "results-v2/"
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name

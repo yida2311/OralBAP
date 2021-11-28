@@ -51,10 +51,13 @@ class BAPnet(SegmentationModel):
         
         self.min_ratio = aux_params['min_ratio']
         self.momentum = aux_params['momentum']
+        self.temperature = aux_params['temperature']
+        self.weight_type = aux_params['weight_type']
         self.register_buffer("thresh", torch.zeros(1, dtype=torch.float))
         # create Background Memory Banck
         self.K = aux_params['memory_bank']['K']  # 1000
         self.T = aux_params['memory_bank']['T']  # 100
+        self.m = aux_params['memory_bank']['m']
         self.item = 1  # [normal, mucosa, tumor]
         self.register_buffer("queue", torch.randn(self.dim, self.K))
         self.queue = F.normalize(self.queue, dim=0)
@@ -80,6 +83,17 @@ class BAPnet(SegmentationModel):
         ptr = (ptr + batch_size) % self.K  # move pointer
         self.queue_ptr[0] = ptr
 
+    def background_prototype_generation(self, feature, mask):
+        n, c, h, w = feature.size()
+        mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        bg_mask = mask == 1
+        area = torch.sum(bg_mask, dim=(1,2)).float()
+        digit = torch.sum(feature*bg_mask.unsqueeze(1), dim=(2,3)) / (area.unsqueeze(1)+1) # N x 256
+        ratio = area / (h*w)
+        proto_state = ratio>self.min_ratio
+        proto = F.normalize(digit[proto_state], dim=1)
+
+        return proto, proto_state
 
     def prototype_generation(self, feature, sim, mask):
         """
@@ -96,9 +110,13 @@ class BAPnet(SegmentationModel):
         ## mask operation
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        # sim rectify
+        sim[mask==1] = 1
+        sim[mask!=1] = 1 - sim[mask!=1]
+        # one hot
         mask = one_hot(mask, self.n_class) # N x 4 x h x w
         ## reweighting
-        weighted_feat = feature * (1-sim.unsqueeze(1))
+        weighted_feat = feature * (sim.unsqueeze(1))
         digit = weighted_feat.unsqueeze(1) * mask.unsqueeze(2)  # N x 4 x 256 x h x w
         # GAP
         weight = torch.sum(mask*sim.unsqueeze(1), dim=(2,3))
@@ -109,11 +127,10 @@ class BAPnet(SegmentationModel):
         area = torch.sum(mask, dim=(2,3)) # N x 4
         ratio = area / (h*w)
         label[ratio<self.min_ratio] = -1
-        proto = F.normalize(digit[:,1,:][label[:,1]==1], dim=1)
         digit = digit.view(-1, c)
         label = label.view(-1)
 
-        return digit, label, proto
+        return digit, label
     
     def prototype_selection(self):
         inds = list(range(self.K))
@@ -122,22 +139,47 @@ class BAPnet(SegmentationModel):
         proto = self.queue[:, inds]
 
         return proto  # [256 x 100]
+    
+    def similarity_weight(self, proto, proto_k, proto_k_state):
+        """
+         proto: (256 x (M+K)
+         proto_k: M x 256
+         proto_k_state: N
 
-    def similarity_calculation(self, feature, proto):
+         return:
+            weight: N x (M+K)
+        """
+        _, k = proto.size()
+        m, _ = proto_k.size()
+        n = proto_k_state.size(0)
+        weight = torch.ones((n, k), dtype=torch.float).cuda()
+        weight[proto_k_state] = torch.mm(proto_k, proto)
+        if self.weight_type == 'softmax':
+            weight = F.softmax(weight/self.temperature, dim=1)
+        elif self.weight_type == 'weighted':
+            weight = weight / torch.sum(weight, dim=1).unsqueeze(1)
+        elif self.weight_type == 'mean':
+            weight = torch.ones((n, k), dtype=torch.float).cuda() / k
+
+        return weight
+
+    def similarity_calculation(self, feature, proto, weight):
         """
             feature: N x 256 x h x w
             proto: 256 x k
-            mask: N x H x W
+            weight: N x k
             return:
                 sim: N x 3 x h x w
         """
         n, c, h, w = feature.size()
+        k = proto.size(1)
         # normalize
         feature = F.normalize(feature, dim=1)
         # similarity matrix
         feature = feature.permute(0, 2, 3, 1).contiguous().view(-1, c)  # (Nhw) x 256
         sim = F.relu(torch.mm(feature, proto))  # (Nhw) x k
-        sim = torch.mean(sim, dim=1).view(n, h, w)
+        sim = sim.view(n, h, w, k).permute(0, 3, 1, 2).contiguous() * weight.unsqueeze(2).unsqueeze(3) # N x k x h x w
+        sim = torch.sum(sim, dim=1)
 
         return sim.detach()
     
@@ -156,10 +198,15 @@ class BAPnet(SegmentationModel):
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         bg_mask = (mask == 1)
         fg_mask = (mask != 1)
-        bg_sim = sim[bg_mask]
-        thresh = bg_sim.sum() / bg_mask.sum()
+        bg_sim = sim * bg_mask
+
+        threshs = torch.sum(bg_sim, dim=(1,2)) / (torch.sum(bg_mask, dim=(1,2))+1e-1)  # N
+        thresh = threshs.mean()
         self.thresh = (1-self.momentum) * thresh + self.momentum * self.thresh
-        noise_mask = (sim > self.thresh) & fg_mask
+        ratio = torch.sum(bg_mask, dim=(1,2)) / (H*W)
+        threshs[ratio<self.min_ratio] = self.thresh
+
+        noise_mask = (sim > threshs.unsqueeze(1).unsqueeze(2)) & fg_mask
         pseudo[noise_mask] = 1  # modify to normal
 
         return pseudo
@@ -168,19 +215,24 @@ class BAPnet(SegmentationModel):
         _, H, W = mask.size()
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
         seg_feat, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
+        # background proto
+        proto_k, proto_k_state = self.background_prototype_generation(feat, mask)
         # proto selection for similarity calculation
         proto = self.prototype_selection() #  100 x 256
+        # sim weight
+        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim = self.similarity_calculation(feat, proto) # n x h x w
+        sim = self.similarity_calculation(feat, proto, sim_weight) # n x h x w
         # pseudo mask generation
         seg_label = self.pseudo_mask_generation(sim, mask)
         # prototype generation
-        digit, cls_label, new_proto = self.prototype_generation(feat, sim, mask) # nx4x256, nx4
-        self._dequeue_and_enqueue(new_proto)
+        digit, cls_label = self.prototype_generation(feat, sim, mask) # nx4x256, nx4
+        self._dequeue_and_enqueue(proto_k)
         # sgementation head
         seg_feat = self.segmentation_head(seg_feat)
         # linear classifier
         cls_feat = self.classification_head(digit)
+
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         
         return seg_feat, seg_label, cls_feat, cls_label, sim
@@ -196,10 +248,14 @@ class BAPnet(SegmentationModel):
         _, H, W = mask.size()
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
         _, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
+        # background proto
+        proto_k, proto_k_state = self.background_prototype_generation(feat, mask)
         # proto selection for similarity calculation
         proto = self.prototype_selection() # 100 x 256
+        # sim weight
+        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim = self.similarity_calculation(feat, proto) # n x h x w
+        sim = self.similarity_calculation(feat, proto, sim_weight) # n x h x w
         # pseudo mask generation
         pseudo = self.pseudo_mask_generation(sim, mask)
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)

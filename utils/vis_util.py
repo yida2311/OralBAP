@@ -2,12 +2,12 @@ import numpy as np
 from PIL import Image
 from torch._C import dtype
 
-CLASS_COLORS = (
-    (0, 0, 0),
-    (192, 0, 0), 
-    (0, 192, 0), 
-    (0, 0, 192)
-)
+CLASS_COLORS = [
+    [0, 0, 0],
+    [144, 64, 64],
+    [64, 144, 64],
+    [0, 144, 128],
+]
 
 def RGB_mapping_to_class(label):
     h, w = label.shape[0], label.shape[1]
