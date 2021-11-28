@@ -39,7 +39,7 @@ class Config:
                 'min_ratio': 0.1,
                 'momentum': 0.9,
                 'temperature': 0.3,
-                'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
+                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
@@ -132,13 +132,15 @@ class Config:
         self.acc_step = 1
         self.ckpt_path = None
         if not train:
-            self.ckpt_path = 'results/saved_models/bapnet-bap1-[11-13-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
+            self.task_name = "bapnetTA-bap2-[11-26-14]-train-2"
+            self.ckpt_path = 'results-v2/saved_moels/' + self.task_name + '/bapnetTA-resnet34-best-fine.pth'
+        
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
         # output config
-        out_root = "results/"
+        out_root = "results-v2/"
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
@@ -149,7 +151,7 @@ class Config:
         
         # test cfg
         # self.testset_cfg = self.fineset_cfg
-        self.test_output_path = out_root + "test predictions/" + self.task_name 
+        self.test_output_path = out_root + "test predictions/" + self.task_name + 'output'
         self.test_sim_path  = out_root + "test predictions/" + self.task_name +'/sim/'
         self.test_pseudo_path  = out_root + "test predictions/" + self.task_name +'/pseudo/'
 

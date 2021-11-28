@@ -64,7 +64,7 @@ class Config:
                 "use_size_const": True,
                 "use_curriculum": True,
                 "sim_weight": True,
-                'sim_norm': True,
+                'sim_norm': False,
                 "aux_params":{
                     "init_t": 5.0,
                     "max_t": 10.0,
@@ -149,7 +149,7 @@ class Config:
         
         # test cfg
         # self.testset_cfg = self.fineset_cfg
-        self.test_output_path = out_root + "test predictions/" + self.task_name 
+        self.test_output_path = out_root + "test predictions/" + self.task_name + 'output'
         self.test_sim_path  = out_root + "test predictions/" + self.task_name +'/sim/'
         self.test_pseudo_path  = out_root + "test predictions/" + self.task_name +'/pseudo/'
 
