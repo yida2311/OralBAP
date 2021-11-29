@@ -144,7 +144,7 @@ def main_patch(cfg, device):
             dataset.get_patches_from_index(i)
             slide = dataset.slide 
             dataloader = DataLoader(dataset, batch_size=cfg.batch_size, num_workers=cfg.num_workers, shuffle=False, pin_memory=True)
-            
+            print(slide)
             sim_save_path = os.path.join(cfg.test_sim_path, slide)
             pseudo_save_path = os.path.join(cfg.test_pseudo_path, slide)
             output_save_path = os.path.join(cfg.test_output_path, slide)
@@ -161,10 +161,11 @@ def main_patch(cfg, device):
                 imgs = imgs.cuda()
                 masks = masks.cuda()
                 seg_feat, pseudo_label, _, _, sim = model(imgs, masks)
-                sim = sim / sim.max()
+                # for i in range(imgs.size(0)):
+                #     sim[i] = sim[i] / sim[i].max()
                 
                 sim = np.array(255*sim.cpu().detach().numpy(), dtype='uint8')
-                pseudo = pseudo.cpu().detach().numpy()
+                pseudo = pseudo_label.cpu().detach().numpy()
                 output = np.argmax(seg_feat.cpu().detach().numpy(), axis=1)
                 # save
                 for i in range(imgs.size(0)):

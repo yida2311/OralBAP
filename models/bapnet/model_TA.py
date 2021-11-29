@@ -206,6 +206,18 @@ class BAPnetTA(SegmentationModel):
 
         return sim.detach()
     
+    def multi_similarity_calculation(self, feature, proto):
+        n, c, h, w = feature.size()
+        k = proto.size(1)
+        # normalize
+        feature = F.normalize(feature, dim=1)
+        # similarity matrix
+        feature = feature.permute(0, 2, 3, 1).contiguous().view(-1, c)  # (Nhw) x 256
+        sim = F.relu(torch.mm(feature, proto))  # (Nhw) x k
+        sim = sim.view(n, h, w, k).permute(0, 3, 1, 2).contiguous()
+
+        return sim.detach()
+    
     def pseudo_mask_generation(self, sim, mask):
         """ if sim > high_thresh, it means these pixels are similar to background;
             if sim < low_thresh, it means these pixels remain formal label;
@@ -226,7 +238,7 @@ class BAPnetTA(SegmentationModel):
         threshs = torch.sum(bg_sim, dim=(1,2)) / (torch.sum(bg_mask, dim=(1,2))+1e-1)  # N
         thresh = threshs.mean()
         self.thresh = (1-self.momentum) * thresh + self.momentum * self.thresh
-        ratio = torch.sum(bg_mask, dim=(1,2)) / (H*W)
+        ratio = torch.true_divide(torch.sum(bg_mask, dim=(1,2)), (H*W))
         threshs[ratio<self.min_ratio] = self.thresh
 
         noise_mask = (sim > threshs.unsqueeze(1).unsqueeze(2)) & fg_mask
@@ -292,6 +304,28 @@ class BAPnetTA(SegmentationModel):
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
 
         return sim, pseudo
+    
+    def get_multi_similarity_map(self, img, mask):
+        _, H, W = mask.size()
+        # query forward
+        _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
+        # key forward
+        with torch.no_grad():
+            feat_k = self.encoder_k.get_proto(img) # x8[256]
+            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
+        # bg proto construction
+        proto = self.prototype_selection() # 100 x 256
+        # similarity map weight
+        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+        # print(sim_weight)
+        # similarity calculation
+        sim = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
+        sim = F.interpolate(sim.unsqueeze(1), size=(H,W), mode='bilinear').squeeze()
+        # similarity calculation
+        sims = self.multi_similarity_calculation(feat_q, proto) # n x k x h x w
+        sims = F.interpolate(sims, size=(H,W), mode='bilinear')
+
+        return sims, sim
         
 
 # utils

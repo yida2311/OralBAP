@@ -116,12 +116,13 @@ class Config:
             train_slide_list = json.load(f)['train']
         self.testset_cfg = {
             "slide_list": train_slide_list,
-            "img_dir": root +  "patch/",
-            "mask_dir": root +  "std_mask/",
-            "slide_mask_dir": "/media/ldy/7E1CA94545711AE6/OSCC/" + "2.5x_mask/std_mask/",
-            "meta_file": root + "tile_info.json",
+            "img_dir": train_root +  "patch/",
+            "mask_dir": train_root +  "std_mask/",
+            "slide_mask_dir": root + "2.5x_mask/std_mask/",
+            "meta_file": train_root + "tile_info.json",
             "label": True,
         }
+        # self.testset_cfg = self.coarseset_cfg
 
         # train config
         self.scheduler = 'poly' # ['cos', 'poly', 'step', 'ym']
@@ -133,7 +134,7 @@ class Config:
         self.ckpt_path = None
         if not train:
             self.task_name = "bapnetTA-bap2-[11-26-14]-train-2"
-            self.ckpt_path = 'results-v2/saved_moels/' + self.task_name + '/bapnetTA-resnet34-best-fine.pth'
+            self.ckpt_path = 'results-v2/saved_models/' + self.task_name + '/bapnetTA-resnet34-best-fine.pth'
         
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
@@ -151,7 +152,7 @@ class Config:
         
         # test cfg
         # self.testset_cfg = self.fineset_cfg
-        self.test_output_path = out_root + "test predictions/" + self.task_name + 'output'
+        self.test_output_path = out_root + "test predictions/" + self.task_name + '/output'
         self.test_sim_path  = out_root + "test predictions/" + self.task_name +'/sim/'
         self.test_pseudo_path  = out_root + "test predictions/" + self.task_name +'/pseudo/'
 
