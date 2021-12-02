@@ -1,2 +1,2 @@
-from .unet import Unet
+from .unet import Unet, UnetTA, BAPnetMT
 from .bapnet import BAPnet, BAPnetTA

@@ -18,8 +18,8 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
-from models import BAPnet, BAPnetTA
-from utils.loss import CrossEntropyLoss, SegClsLoss
+from models import BAPnetMT
+from utils.loss import BapMTLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
@@ -68,10 +68,7 @@ def main(cfg, device, local_rank=0):
             os.makedirs(cfg.fine_output_path)
     
     ### MODEL INIT
-    if cfg.model == 'bapnet':
-        model = BAPnet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
-    elif cfg.model == 'bapnetTA':
-        model = BAPnetTA(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.modelTA_cfg)
+    model = BAPnetMT(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
     if distributed:
         model = model_Single2Parallel(model, device, local_rank)
     else:
@@ -116,11 +113,8 @@ def main(cfg, device, local_rank=0):
     )
     ### LOSS
     # loss_cfg = cfg.loss_cfg[cfg.loss]
-    if cfg.loss == "ce":
-        criterion = nn.CrossEntropyLoss(reduction='mean')
-    elif cfg.loss == "bap":
-        print("BAP Loss")
-        criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
+    print("BAP Loss")
+    criterion = BapMTLoss(**cfg.loss_cfg[cfg.loss])
     criterion = criterion.cuda()
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
@@ -172,9 +166,9 @@ def main(cfg, device, local_rank=0):
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-            seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, masks, epoch) 
+            out = model.forward(imgs, masks)
+            # seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
+            loss = criterion(masks, epoch, **out) 
             
             if distributed:
                 loss.backward()
@@ -189,6 +183,9 @@ def main(cfg, device, local_rank=0):
                     optimizer.zero_grad()
 
             # output
+            seg_preds = out["seg_feat_k"]
+            cls_preds = out["cls_feat"]
+            cls_label = out["cls_label"]
             train_loss += loss.item()
             outputs = seg_preds.cpu().detach().numpy()
             predictions = np.argmax(outputs, axis=1)
@@ -275,7 +272,7 @@ def main(cfg, device, local_rank=0):
                         fine_mF1=cls_scores_fine['mF1'],
                 )
                 update_writer(writer, writer_info, epoch)
-
+        # break
     if local_rank == 0:     
         f_log.close() 
 
@@ -330,8 +327,10 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-                seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
+                out = model.forward(imgs, masks)
+                seg_preds = out["seg_feat_k"]
+                cls_preds = out["cls_feat"]
+                cls_label = out["cls_label"]
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
             cls_predictions = np.argmax(cls_preds.cpu().detach().numpy(), axis=1)
@@ -426,12 +425,12 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
 
 
 if __name__ == '__main__':
-    from configs.remote_config_bapnet import Config
+    from configs.remote_config_bapnetMT import Config
 
     args = argParser()
     cfg = Config(train=True)
     main(cfg, device, local_rank=local_rank)
-
+    print(cfg.task_name)
     # w_list = [0, 0.5, 1]
     # for w in w_list:
     #     cfg = Config(train=True)

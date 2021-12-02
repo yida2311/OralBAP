@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "bapnetTA"
+        self.model = "unetTA"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -14,18 +14,8 @@ class Config:
             'decoder_channels': (256, 128, 64, 64),
             'decoder_attention_type': 'scse',
             'in_channels': 3,
-            'aux_params': {
-                'memory_bank': {
-                    'K': 1000,
-                    'T': 100,
-                    'm': 0.9,
-                },
-                'min_ratio': 0.1,
-                'momentum': 0.9,
-                'temperature': 1.0,
-                'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
-            }
         }
+
         self.modelTA_cfg = {
             'encoder_depth': 5,
             'encoder_weights': 'imagenet',
@@ -34,42 +24,54 @@ class Config:
             'decoder_attention_type': 'scse',
             'in_channels': 3,
             'aux_params': {
-                'memory_bank': {
-                    'K': 1000,
-                    'T': 100,
-                    'm': 0.999,
-                },
-                'min_ratio': 0.1,
-                'momentum': 0.9,
-                'temperature': 1.0,
-                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
-            }
+                'momentum': 0.99,
+            },
         }
+
         self.train = train
 
         # loss config
-        self.loss = "bap" # ["ce", "sce", 'ce-dice]
+        self.loss = "seg_mt" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
-            "bap": {
+            "sce": {
                 "alpha": 1.0,
                 "beta": 1.0,
-                "gamma": 1.0,
-                "w": 1.0,
-                "use_sim_loss": True,
+            },
+            "ce-dice": {
+                "alpha": 0.1,
+            },
+            "focal": {
+                "gamma": 2,
+            },
+            "bap": {
+                "alpha": 1.0,
+                "beta": 1,
+                "w": 0.1,
                 "use_size_const": False,
                 "use_curriculum": True,
-                "sim_weight": True,
+                "sim_weight": False,
+                'sim_norm': False,
                 "aux_params":{
                     "init_t": 5.0,
                     "max_t": 10.0,
                     "mulcoef": 1.01,
                 },
             },
+            "seg_ta": {
+                "alpha": 1.0,
+                "w": 0.1,
+                "use_curriculum": True,
+            },
+            "seg_mt": {
+                "alpha": 1.0,
+                "w": 0.5,
+                "use_curriculum": True,
+                'use_kl': True,
+            },
         }
 
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
-        # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
             self.task_name += "-" + "train"
         else:
@@ -124,28 +126,25 @@ class Config:
         self.warmup_epochs = 2
         self.batch_size = 12
         self.acc_step = 1
-        self.ckpt_path = None
+        self.ckpt_path = None # pretrained model
         if not train:
-            self.ckpt_path = 'results/saved_models/bapnet-bap1-[11-13-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
+            self.ckpt_path = 'results/saved_models/bapnet-bap-[11-09-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
+        
         # output config
         out_root = "results-v2/"
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
-        self.sim_output_path = out_root + 'sim/' + self.task_name
         self.pseudo_output_path = out_root + 'pseudo/' + self.task_name
-        self.coarse_output_path = out_root + "coarse predictions/" + self.task_name 
+        self.coarse_output_path = out_root + "corse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
         # test cfg
-        # self.testset_cfg = self.fineset_cfg
-        self.test_output_path = out_root + "test predictions/" + self.task_name + '/output'
-        self.test_sim_path = out_root + "test predictions/" + self.task_name +'/sim/'
+        self.testset_cfg = self.fineset_cfg
+        self.test_output_path = out_root + "test predictions/" + self.task_name + '/' + 'output'
         self.test_pseudo_path = out_root + "test predictions/" + self.task_name +'/pseudo/'
-
-
 

@@ -7,9 +7,9 @@ from segmentation_models_pytorch.encoders import get_encoder
 from segmentation_models_pytorch.base import SegmentationHead, SegmentationModel, ClassificationHead
 import segmentation_models_pytorch.base.initialization as init
 
-from .encoder import BAPnetDecoder, BAPnetEncoder
+from .decoder import UnetDecoder
 
-class BAPnetTA(SegmentationModel):
+class BAPnetMT(SegmentationModel):
     def __init__(
         self,
         encoder_name: str = "resnet34",
@@ -19,41 +19,39 @@ class BAPnetTA(SegmentationModel):
         decoder_channels: List[int] = (256, 128, 64, 64),
         decoder_attention_type: Optional[str] = None,
         in_channels: int = 3,
+        proj_channels: int = 128,
         classes: int = 4,
         activation: Optional[Union[str, callable]] = None,
         aux_params: Optional[dict] = None,
     ):
-        super().__init__()
-        self.encoder_q = BAPnetEncoder(
-            encoder_name,
-            in_channels=in_channels, # 3
+        super(BAPnetMT, self).__init__()
+
+        self.teacher = BaseNet(
+            encoder_name=encoder_name,
             encoder_depth=encoder_depth,
             encoder_weights=encoder_weights,
-            center=True,
-            use_batchnorm=decoder_use_batchnorm,
-            attention_type=decoder_attention_type,
-        )
-        self.encoder_k = BAPnetEncoder(
-            encoder_name,
-            in_channels=in_channels, # 3
-            encoder_depth=encoder_depth,
-            encoder_weights=encoder_weights,
-            center=True,
-            use_batchnorm=decoder_use_batchnorm,
-            attention_type=decoder_attention_type,
-        )
-        self.decoder = BAPnetDecoder(
-            use_batchnorm=decoder_use_batchnorm,
-            attention_type=decoder_attention_type,
-        )
-        self.segmentation_head = SegmentationHead(
-            in_channels=decoder_channels[-1], # 64
-            out_channels=classes,
+            decoder_use_batchnorm=decoder_use_batchnorm,
+            decoder_channels=decoder_channels,
+            decoder_attention_type=decoder_attention_type,
+            in_channels=in_channels,
+            proj_channels=proj_channels,
+            classes=classes,
             activation=activation,
-            kernel_size=3,
         )
-        self.dim = 256
-        self.classification_head = nn.Linear(decoder_channels[0], classes, bias=False)
+        self.student = BaseNet(
+            encoder_name=encoder_name,
+            encoder_depth=encoder_depth,
+            encoder_weights=encoder_weights,
+            decoder_use_batchnorm=decoder_use_batchnorm,
+            decoder_channels=decoder_channels,
+            decoder_attention_type=decoder_attention_type,
+            in_channels=in_channels,
+            proj_channels=proj_channels,
+            classes=classes,
+            activation=activation,
+        )
+        
+        self.classification_head = nn.Linear(proj_channels, classes, bias=False)
         
         self.min_ratio = aux_params['min_ratio']
         self.momentum = aux_params['momentum']
@@ -61,6 +59,7 @@ class BAPnetTA(SegmentationModel):
         self.weight_type = aux_params['weight_type']
         self.register_buffer("thresh", torch.zeros(1, dtype=torch.float))
         # create Background Memory Banck
+        self.dim = proj_channels
         self.K = aux_params['memory_bank']['K']  # 1000
         self.T = aux_params['memory_bank']['T'] 
         self.m = aux_params['memory_bank']['m']
@@ -69,24 +68,19 @@ class BAPnetTA(SegmentationModel):
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))
 
         self.n_class = classes
-        self.name = "bap-{}".format(encoder_name)
+        self.name = "bapMT-{}".format(encoder_name)
         self.initialize()
 
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+        for param_q, param_k in zip(self.student.parameters(), self.teacher.parameters()):
             param_k.data.copy_(param_q.data) # initialize
             param_k.requires_grad = False
     
     def initialize(self):
-        init.initialize_head(self.segmentation_head)
         init.initialize_head(self.classification_head)
-        init.initialize_decoder(self.encoder_q.center)
-        init.initialize_decoder(self.encoder_q.decoder_block_1)
-        init.initialize_decoder(self.encoder_q.decoder_block_2)
-        init.initialize_decoder(self.encoder_q.proto_block)
 
     @torch.no_grad()
     def _momentum_update_key_encoder(self):
-        for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
+        for param_q, param_k in zip(self.student.parameters(), self.teacher.parameters()):
             param_k.data = param_k.data * self.m + param_q.data * (1 - self.m)
 
     @torch.no_grad()
@@ -132,6 +126,7 @@ class BAPnetTA(SegmentationModel):
         ## mask operation
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        sim = F.interpolate(sim.unsqueeze(1), size=(h, w), mode='bilinear').squeeze(1)
         # sim rectify
         sim[mask==1] = 1
         sim[mask!=1] = 1 - sim[mask!=1]
@@ -218,7 +213,7 @@ class BAPnetTA(SegmentationModel):
 
         return sim
     
-    def pseudo_mask_generation(self, sim, mask):
+    def sim_pseudo_label_generation(self, sim, mask):
         """ if sim > high_thresh, it means these pixels are similar to background;
             if sim < low_thresh, it means these pixels remain formal label;
             else, it means uncertain
@@ -243,90 +238,181 @@ class BAPnetTA(SegmentationModel):
 
         noise_mask = (sim > threshs.unsqueeze(1).unsqueeze(2)) & fg_mask
         pseudo[noise_mask] = 1  # modify to normal
+        pseudo[mask==0] = 0
+
+        return pseudo
+    
+    def seg_pseudo_label_generation(self, seg_feat, mask):
+        n, H, W = mask.size()
+        seg_feat = F.interpolate(seg_feat, size=(H, W), mode='bilinear')
+        pseudo = torch.argmax(seg_feat, dim=1)
+        pseudo[mask==0] = 0
+        pseudo[mask==1] = 1
 
         return pseudo
         
     def forward(self, img, mask):
         _, H, W = mask.size()
-        # query forward
-        encoder_feats, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
-        seg_feat = self.decoder(*encoder_feats) # x2[64]
-        # key forward
-        with torch.no_grad():
-            self._momentum_update_key_encoder()
-            feat_k = self.encoder_k.get_proto(img) # x8[256]
-            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
+        # base net forward
+        seg_feat_q, proj_feat_q = self.student(img)
+        self._momentum_update_key_encoder()
+        seg_feat_k, proj_feat_k = self.teacher(img)
+        # proto_k, proto_q
+        proto_q, proto_q_state = self.background_prototype_generation(proj_feat_q, mask) # M x 256, N 
+        proto_k, proto_k_state = self.background_prototype_generation(proj_feat_k, mask) # M x 256, N 
         # # proto selection for similarity calculation
         proto = self.prototype_selection() #  100 x 256
         # similarity map weight_type
-        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+        sim_weight_q = self.similarity_weight(proto, proto_q, proto_q_state)
+        sim_weight_k = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim_q = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
-        sim_k = self.similarity_calculation(feat_k, proto, sim_weight) # n x h x w
-        # pseudo mask generation for segmentation
-        seg_label = self.pseudo_mask_generation(sim_k, mask)
-        # classification digit & label generation
-        digit, cls_label = self.prototype_generation(feat_q, sim_q.detach(), mask) # nx4x256, nx4
-        # sgementation head
-        seg_feat = self.segmentation_head(seg_feat)
-        # linear classifier
-        cls_feat = self.classification_head(digit)
-
+        sim_q = self.similarity_calculation(proj_feat_q, proto, sim_weight_q) # n x h x w
+        sim_k = self.similarity_calculation(proj_feat_k, proto, sim_weight_k) # n x h x w
+        # interpolate
+        seg_feat_q = F.interpolate(seg_feat_q, size=(H, W), mode='bilinear')
+        seg_feat_k = F.interpolate(seg_feat_k, size=(H, W), mode='bilinear')
         sim_q = F.interpolate(sim_q.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
+        # pseudo mask generation for segmentation
+        sim_pseudo_label = self.sim_pseudo_label_generation(sim_k, mask)
+        seg_pseudo_label = self.seg_pseudo_label_generation(seg_feat_k, mask)
+        # classification digit & label generation
+        digit, cls_label = self.prototype_generation(proj_feat_q, sim_q.detach(), mask) # nx4x256, nx4
+        # linear classifier
+        cls_feat = self.classification_head(digit)
         self._dequeue_and_enqueue(proto_k)
 
-        return seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k
+        
+        output = {"seg_feat_q": seg_feat_q, "seg_feat_k": seg_feat_k, "seg_pseudo_label": seg_pseudo_label, 
+            "sim_q": sim_q, "sim_k": sim_k, "sim_pseudo_label": sim_pseudo_label,
+            "cls_feat": cls_feat, "cls_label": cls_label
+        }
+        
+
+        return output
 
     def inference(self, img):
-        encoder_feats, _ = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
-        seg_feat = self.decoder(*encoder_feats) # x2[64]
-        seg_feat = self.segmentation_head(seg_feat)
+        seg_feat, _ = self.teacher(img)
         
         return seg_feat
     
-    def get_similarity_map(self, img, mask):
-        _, H, W = mask.size()
-        # query forward
-        _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
-        # key forward
-        with torch.no_grad():
-            feat_k = self.encoder_k.get_proto(img) # x8[256]
-            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
-        # bg proto construction
-        proto = self.prototype_selection() # 100 x 256
-        # similarity map weight
-        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
-        # similarity calculation
-        sim_k = self.similarity_calculation(feat_k, proto, sim_weight) # n x h x w
-        # pseudo mask generation
-        pseudo = self.pseudo_mask_generation(sim_k, mask)
-        sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
+    # def get_similarity_map(self, img, mask):
+    #     _, H, W = mask.size()
+    #     # query forward
+    #     _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
+    #     # key forward
+    #     with torch.no_grad():
+    #         feat_k = self.encoder_k.get_proto(img) # x8[256]
+    #         proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
+    #     # bg proto construction
+    #     proto = self.prototype_selection() # 100 x 256
+    #     # similarity map weight
+    #     sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+    #     # similarity calculation
+    #     sim_k = self.similarity_calculation(feat_k, proto, sim_weight) # n x h x w
+    #     # pseudo mask generation
+    #     pseudo = self.pseudo_mask_generation(sim_k, mask)
+    #     sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
 
-        return sim, pseudo
+    #     return sim, pseudo
     
-    def get_multi_similarity_map(self, img, mask):
-        _, H, W = mask.size()
-        # query forward
-        _, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
-        # key forward
-        with torch.no_grad():
-            feat_k = self.encoder_k.get_proto(img) # x8[256]
-            proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
-        # bg proto construction
-        proto = self.prototype_selection() # 100 x 256
-        # similarity map weight
-        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
-        # print(sim_weight)
-        # similarity calculation
-        sim = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
-        sim = F.interpolate(sim.unsqueeze(1), size=(H,W), mode='bilinear').squeeze()
-        # similarity calculation
-        sims = self.multi_similarity_calculation(feat_q, proto) # n x k x h x w
-        sims = F.interpolate(sims, size=(H,W), mode='bilinear')
+    # def get_multi_similarity_map(self, img, mask):
+    #     _, H, W = mask.size()
+    #     # query forward
+    #     _, feat_q = self.student(img) # [x8,x4,x2] , x8[256] 
+    #     # key forward
+    #     with torch.no_grad():
+    #         feat_k = self.encoder_k.get_proto(img) # x8[256]
+    #         proto_k, proto_k_state = self.background_prototype_generation(feat_k, mask) # M x 256, N 
+    #     # bg proto construction
+    #     proto = self.prototype_selection() # 100 x 256
+    #     # similarity map weight
+    #     sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+    #     # print(sim_weight)
+    #     # similarity calculation
+    #     sim = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
+    #     sim = F.interpolate(sim.unsqueeze(1), size=(H,W), mode='bilinear').squeeze()
+    #     # similarity calculation
+    #     sims = self.multi_similarity_calculation(feat_q, proto) # n x k x h x w
+    #     sims = F.interpolate(sims, size=(H,W), mode='bilinear')
 
-        return sims, sim.detach()
+    #     return sims, sim.detach()
         
+
+
+
+class BaseNet(SegmentationModel):
+    """ Modified from Unet by add ProjHead"""
+    def __init__(
+        self,
+        encoder_name: str = "resnet34",
+        encoder_depth: int = 5,
+        encoder_weights: str = "imagenet",
+        decoder_use_batchnorm: bool = True,
+        decoder_channels: List[int] = (256, 128, 64, 64),
+        decoder_attention_type: Optional[str] = None,
+        in_channels: int = 3,
+        proj_channels: int = 128,
+        classes: int = 1,
+        activation: Optional[Union[str, callable]] = None,
+        aux_params: Optional[dict] = None,
+    ):
+        super(BaseNet, self).__init__()
+
+        self.encoder = get_encoder(
+            encoder_name,
+            in_channels=in_channels, # 3
+            depth=encoder_depth,
+            weights=encoder_weights,
+        )
+
+        self.decoder = UnetDecoder(
+            encoder_channels=self.encoder.out_channels,  # [3,64,64,128,256,512]
+            decoder_channels=decoder_channels, # [256, 128, 64, 64]
+            n_blocks=encoder_depth-1, # 4
+            use_batchnorm=decoder_use_batchnorm,
+            center=True, # attention\conv\Identity
+            attention_type=decoder_attention_type,
+        )
+
+        self.segmentation_head = SegmentationHead(
+            in_channels=decoder_channels[-1], # 64
+            out_channels=classes,
+            activation=activation,
+            kernel_size=3,
+        )
+        self.proj_channels = proj_channels
+        self.proj_head = nn.Sequential(
+            nn.Conv2d(in_channels=decoder_channels[-1], out_channels=self.proj_channels, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(self.proj_channels),
+            nn.ReLU(),
+            nn.Dropout2d(0.5),
+            nn.Conv2d(in_channels=self.proj_channels, out_channels=self.proj_channels, kernel_size=1, stride=1, padding=0),
+        )
+
+        if aux_params is not None:
+            self.classification_head = ClassificationHead(
+                in_channels=self.encoder.out_channels[-1], **aux_params
+            )
+        else:
+            self.classification_head = None
+
+        self.name = "u-{}".format(encoder_name)
+        self.initialize()
+
+    def initialize(self):
+        init.initialize_head(self.segmentation_head)
+        init.initialize_head(self.proj_head)
+        init.initialize_decoder(self.decoder)
+
+    def forward(self, img):
+        feats = self.encoder(img)
+        x = self.decoder(*feats)
+        seg_feat = self.segmentation_head(x)
+        proj_feat = self.proj_head(x)
+
+        return seg_feat, proj_feat
+
 
 # utils
 @torch.no_grad()

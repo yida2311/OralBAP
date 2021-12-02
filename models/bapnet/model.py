@@ -235,7 +235,7 @@ class BAPnet(SegmentationModel):
 
         sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         
-        return seg_feat, seg_label, cls_feat, cls_label, sim
+        return seg_feat, seg_label, cls_feat, cls_label, sim, None
 
     def inference(self, img):
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]

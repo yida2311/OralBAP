@@ -4,43 +4,120 @@ import torch.nn.functional as F
 import torch
 from typing import Optional
 
-__all__ = ['SegClsLoss', 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
-            'FocalLoss', 'SoftCrossEntropyLoss2d']
+# __all__ = ['SegClsLoss', 'SegTALoss', 'SegMTLoss' 'CrossEntropyLoss', 'SymmetricCrossEntropyLoss', 'NormalizedSymmetricCrossEntropyLoss', 
+#             'FocalLoss', 'SoftCrossEntropyLoss2d']
 
+#======================BAP MT Loss=============================
+class BapMTLoss(nn.Module):
+    """
+    Hybrid Loss: 
+        Segmentation Loss: seg loss + seg pseudo seg loss + sim seg pseudo loss
+        Classification Loss: cls loss
+        Consistency Loss: seg consistency loss + sim consisitency loss + seg-sim consistency
+    """
+    def __init__(self,
+                alpha = 1.0,  # cls loss weight
+                beta = 1,  # cons loss weight
+                w = 0.5,
+                use_curriculum = True,
+                aux_params: Optional[dict] = None,
+                ):
+        super(BapMTLoss, self).__init__()
+        self.seg_loss =  CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.cons_seg_loss = softmax_kl_loss
+        self.cons_loss = nn.MSELoss(reduction='mean')
+    
+        self.alpha = alpha
+        self.beta = beta
+
+        self.use_curriculum = use_curriculum
+        self.T = 120 
+        self.w = w 
+
+    def forward(self, gt_label, epoch, **outputs):
+        seg_feat_q = outputs["seg_feat_q"]
+
+        w = epoch/self.T*(1-self.w) + self.w
+        seg_gt_term = self.seg_loss(seg_feat_q, gt_label)
+        seg_sim_term = self.seg_loss(seg_feat_q, outputs["sim_pseudo_label"])
+        seg_seg_term = self.seg_loss(seg_feat_q, outputs["seg_pseudo_label"])
+        seg_term = (1-w)*seg_gt_term + w*(seg_sim_term+seg_seg_term)/2
+
+        cls_term = self.cls_loss(outputs["cls_feat"], outputs["cls_label"])
+
+        seg_sim_feat = F.softmax(seg_feat_q, dim=1)[:, 1, ...]
+        cons_seg_term = self.cons_seg_loss(seg_feat_q, outputs["seg_feat_k"])
+        cons_sim_term = self.cons_loss(outputs["sim_q"], outputs["sim_k"])
+        cons_seg_sim_term = self.cons_loss(seg_sim_feat, outputs["sim_q"])
+        cons_term = (cons_seg_term+cons_sim_term+cons_seg_sim_term) / 3
+
+        loss = seg_term + self.alpha * cls_term + self.beta * cons_term
+
+        return loss
+
+
+def softmax_mse_loss(input_logits, target_logits):
+    """Takes softmax on both sides and returns MSE loss
+    Note:
+    - Returns the sum over all examples. Divide by the batch size afterwards
+      if you want the mean. 
+    - Sends gradients to inputs but not the targets.
+    """
+    assert input_logits.size() == target_logits.size()
+    input_softmax = F.softmax(input_logits, dim=1)
+    target_softmax = F.softmax(target_logits, dim=1)
+    num_classes = input_logits.size()[1]
+    return F.mse_loss(input_softmax, target_softmax, size_average=True) / num_classes
+    
+def softmax_kl_loss(input_logits, target_logits):
+    assert input_logits.size() == target_logits.size()
+    input_log_softmax = F.log_softmax(input_logits, dim=1)
+    target_softmax = F.softmax(target_logits, dim=1)
+
+    return F.kl_div(input_log_softmax, target_softmax, size_average=True)
 
 #===================Seg Cls Loss ==============================
 class SegClsLoss(nn.Module):
     def __init__(self,
                 alpha = 1.0,
                 beta = 1e-2,
+                gamma = 1.0,
                 w = 0.5,
                 use_size_const = False,
+                use_sim_loss = True,
                 use_curriculum = False,
                 sim_weight = True,
-                sim_norm = False,
                 aux_params: Optional[dict] = None,
                 ):
         super(SegClsLoss, self).__init__()
+        assert use_size_const != use_sim_loss
         self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if sim_weight:
-            self.seg_loss = _WeightedCELoss(sim_norm=sim_norm)
+            self.seg_loss = _WeightedCELoss()
         else:
             self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         self.cls_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
+        if use_sim_loss:
+            self.sim_loss = nn.MSELoss(reduction='mean')
+            self.cons_loss = nn.KLDivLoss(reduction='mean')
 
         self.alpha = alpha
         self.beta = beta
+        self.gamma = gamma
+
         self.use_size_const = use_size_const
+        self.use_sim_loss = use_sim_loss
+        self.use_curriculum = use_curriculum
+
         self.init_t = aux_params['init_t']
         self.max_t = aux_params['max_t']
         self.sim_weight = sim_weight
-        self.sim_norm = sim_norm
         self.epsilon = 0
-        self.use_curriculum = use_curriculum
         self.T = 120 
-        self.w = 0
+        self.w = w
     
     def size_const(self, mask_pred):
         """"
@@ -67,43 +144,51 @@ class SegClsLoss(nn.Module):
         return loss
 
     
-    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim, gt_label, epoch):
-        weight = sim.clone().detach()
-        weight[gt_label==1] = 1
-        weight[seg_label!=1] = 1 - weight[seg_label!=1]
+    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k, gt_label, epoch):
+        
         if self.sim_weight:
+            weight = sim_q.clone().detach()
+            weight[gt_label==1] = 1
+            weight[seg_label!=1] = 1 - weight[seg_label!=1]
             seg_term = self.seg_loss(seg_feat, seg_label, weight)
         else:
             seg_term = self.seg_loss(seg_feat, seg_label)
+        # print(seg_term)
         loss = seg_term
 
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
+            # print(gt_term)
             w = epoch/self.T*(1-self.w) + self.w
             loss =  w* loss + (1-w) * gt_term
 
         cls_term = self.cls_loss(cls_feat, cls_label)
+        # print(cls_term)
         loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
-            elb_term = self.size_const(1-sim)
+            elb_term = self.size_const(1-sim_q)
+            # print(elb_term)
             loss += self.beta * elb_term
+
+        if self.use_sim_loss:
+            target = torch.tensor(seg_label==1, dtype=torch.float)
+            sim_term = self.sim_loss(sim_q, target) 
+            cons_term = self.cons_loss(sim_q, sim_k)
+            # print(sim_term)
+            # print(cons_term)
+            loss += self.gamma * (sim_term + cons_term)
         
         return loss
 
 
+
 class _WeightedCELoss(nn.Module):
-    def __init__(self, sim_norm=False):
+    def __init__(self):
         super(_WeightedCELoss, self).__init__()
         self.ce = CrossEntropyLoss(ignore_index=-1, reduction='none')
-        self.sim_norm = sim_norm
-    
+        
     def forward(self, input, label, weight):
-        if self.sim_norm:
-            for i in range(4):
-                mask = label == i
-                weight[mask] /= torch.sum(weight[mask]) + 1e-1
-            weight *= (torch.sum(weight, dim=(0,1,2))/3)
         loss = self.ce(input, label)
         loss = torch.mean(loss*weight, dim=(0,1,2))
 
@@ -169,6 +254,63 @@ class _ExtendedLBLoss(nn.Module):
             loss_fx[idx_great] = loss_great
         
         loss = loss_fx.mean()
+
+        return loss
+
+#======================    =============================
+class SegMTLoss(nn.Module):
+    def __init__(self,
+                alpha = 1.0,
+                w = 0.5,
+                use_curriculum = False,
+                use_kl = True,
+                aux_params: Optional[dict] = None,
+                ):
+        super(SegMTLoss, self).__init__()
+        self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        if use_kl:
+            self.cons_loss = softmax_kl_loss
+        else:
+            self.cons_loss = softmax_mse_loss
+        self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.alpha = alpha
+        self.use_curriculum = use_curriculum
+        self.T = 120 
+        self.w = w
+    
+    def forward(self, feat, mask, teacher_feat, pseudo, epoch):
+        loss = self.seg_loss(feat, pseudo)
+        if self.use_curriculum:
+            gt_term = self.gt_loss(feat, mask)
+            w = epoch /self.T * (1-self.w) + self.w
+            loss =  w* loss + (1-w) * gt_term
+
+        loss += self.alpha * self.cons_loss(feat, teacher_feat)
+
+        return loss
+
+
+class SegTALoss(nn.Module):
+    def __init__(self,
+                alpha = 1.0,
+                w = 0.5,
+                use_curriculum = False,
+                aux_params: Optional[dict] = None,
+                ):
+        super(SegTALoss, self).__init__()
+        self.gt_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.seg_loss = CrossEntropyLoss(ignore_index=-1, reduction='mean')
+        self.alpha = alpha
+        self.use_curriculum = use_curriculum
+        self.T = 120 
+        self.w = w
+    
+    def forward(self, feat, mask, teacher_feat, pseudo, epoch):
+        loss = self.seg_loss(feat, pseudo)
+        if self.use_curriculum:
+            gt_term = self.alpha * self.gt_loss(feat, mask)
+            w = epoch/self.T*(1-self.w) + self.w
+            loss =  w* loss + (1-w) * gt_term
 
         return loss
 

@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "bapnetTA"
+        self.model = "bapnetMT"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -14,6 +14,7 @@ class Config:
             'decoder_channels': (256, 128, 64, 64),
             'decoder_attention_type': 'scse',
             'in_channels': 3,
+            "proj_channels": 128,
             'aux_params': {
                 'memory_bank': {
                     'K': 1000,
@@ -26,44 +27,16 @@ class Config:
                 'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
             }
         }
-        self.modelTA_cfg = {
-            'encoder_depth': 5,
-            'encoder_weights': 'imagenet',
-            'decoder_use_batchnorm': True,
-            'decoder_channels': (256, 128, 64, 64),
-            'decoder_attention_type': 'scse',
-            'in_channels': 3,
-            'aux_params': {
-                'memory_bank': {
-                    'K': 1000,
-                    'T': 100,
-                    'm': 0.999,
-                },
-                'min_ratio': 0.1,
-                'momentum': 0.9,
-                'temperature': 1.0,
-                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
-            }
-        }
         self.train = train
 
         # loss config
-        self.loss = "bap" # ["ce", "sce", 'ce-dice]
+        self.loss = "bapMT" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
-            "bap": {
+            "bapMT": {
                 "alpha": 1.0,
                 "beta": 1.0,
-                "gamma": 1.0,
-                "w": 1.0,
-                "use_sim_loss": True,
-                "use_size_const": False,
+                "w": 0.2,
                 "use_curriculum": True,
-                "sim_weight": True,
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
             },
         }
 
@@ -137,7 +110,8 @@ class Config:
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
         self.sim_output_path = out_root + 'sim/' + self.task_name
-        self.pseudo_output_path = out_root + 'pseudo/' + self.task_name
+        self.sim_pseudo_output_path = out_root + 'sim pseudo/' + self.task_name
+        self.seg_pseudo_output_path = out_root + 'seg pseudo/' + self.task_name
         self.coarse_output_path = out_root + "coarse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
@@ -145,7 +119,8 @@ class Config:
         # self.testset_cfg = self.fineset_cfg
         self.test_output_path = out_root + "test predictions/" + self.task_name + '/output'
         self.test_sim_path = out_root + "test predictions/" + self.task_name +'/sim/'
-        self.test_pseudo_path = out_root + "test predictions/" + self.task_name +'/pseudo/'
+        self.test_sim_pseudo_path = out_root + "test predictions/" + self.task_name +'/sim pseudo/'
+        self.test_seg_pseudo_path = out_root + "test predictions/" + self.task_name +'/seg pseudo/'
 
 
 
