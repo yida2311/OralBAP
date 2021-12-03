@@ -110,6 +110,7 @@ class BAPnet(SegmentationModel):
         ## mask operation
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        sim = F.interpolate(sim.unsqueeze(1), size=(h, w), mode='nearest').squeeze(1)
         # sim rectify
         sim[mask==1] = 1
         sim[mask!=1] = 1 - sim[mask!=1]
@@ -223,6 +224,7 @@ class BAPnet(SegmentationModel):
         sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
         sim = self.similarity_calculation(feat, proto, sim_weight) # n x h x w
+        sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         # pseudo mask generation
         seg_label = self.pseudo_mask_generation(sim, mask)
         # prototype generation
@@ -230,17 +232,18 @@ class BAPnet(SegmentationModel):
         self._dequeue_and_enqueue(proto_k)
         # sgementation head
         seg_feat = self.segmentation_head(seg_feat)
+        seg_feat = F.interpolate(seg_feat, size=(H, W), mode='bilinear')
         # linear classifier
         cls_feat = self.classification_head(digit)
 
-        sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
-        
         return seg_feat, seg_label, cls_feat, cls_label, sim, None
 
     def inference(self, img):
+        _, _, H, W = img.size()
         encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
         seg_feat, _ = self.decoder(*encoder_feats) # x2[64], x16[256] 
         seg_feat = self.segmentation_head(seg_feat)
+        seg_feat = F.interpolate(seg_feat, size=(H, W), mode='bilinear')
         
         return seg_feat
     
@@ -256,10 +259,10 @@ class BAPnet(SegmentationModel):
         sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
         sim = self.similarity_calculation(feat, proto, sim_weight) # n x h x w
+        sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         # pseudo mask generation
         pseudo = self.pseudo_mask_generation(sim, mask)
-        sim = F.interpolate(sim.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
-
+        
         return sim, pseudo
         
 

@@ -48,14 +48,14 @@ class Config:
         self.train = train
 
         # loss config
-        self.loss = "bap" # ["ce", "sce", 'ce-dice]
+        self.loss = "bapTA" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
-            "bap": {
+            "bapTA": {
                 "alpha": 1.0,
                 "beta": 1.0,
                 "gamma": 1.0,
-                "w": 1.0,
-                "use_sim_loss": True,
+                "w": 0.5,
+                "use_cons_loss": True,
                 "use_size_const": False,
                 "use_curriculum": True,
                 "sim_weight": True,
@@ -63,6 +63,7 @@ class Config:
                     "init_t": 5.0,
                     "max_t": 10.0,
                     "mulcoef": 1.01,
+                    "cons_type": "mse", # ["mse", 'kl-div']
                 },
             },
         }

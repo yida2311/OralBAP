@@ -132,6 +132,7 @@ class BAPnetTA(SegmentationModel):
         ## mask operation
         n, c, h, w = feature.size()
         mask = F.interpolate(mask.unsqueeze(1).to(torch.float), size=(h, w), mode='nearest').squeeze(1).to(torch.long)
+        sim = F.interpolate(sim.unsqueeze(1), size=(h, w), mode='nearest').squeeze(1)
         # sim rectify
         sim[mask==1] = 1
         sim[mask!=1] = 1 - sim[mask!=1]
@@ -251,6 +252,7 @@ class BAPnetTA(SegmentationModel):
         # query forward
         encoder_feats, feat_q = self.encoder_q(img) # [x8,x4,x2] , x8[256] 
         seg_feat = self.decoder(*encoder_feats) # x2[64]
+        proto_q, proto_q_state = self.background_prototype_generation(feat_q, mask) # M x 256, N 
         # key forward
         with torch.no_grad():
             self._momentum_update_key_encoder()
@@ -259,21 +261,25 @@ class BAPnetTA(SegmentationModel):
         # # proto selection for similarity calculation
         proto = self.prototype_selection() #  100 x 256
         # similarity map weight_type
-        sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+        sim_weight_q = self.similarity_weight(proto, proto_q, proto_q_state)
+        sim_weight_k = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
-        sim_q = self.similarity_calculation(feat_q, proto, sim_weight) # n x h x w
-        sim_k = self.similarity_calculation(feat_k, proto, sim_weight) # n x h x w
+        sim_q = self.similarity_calculation(feat_q, proto, sim_weight_q) # n x h x w
+        sim_k = self.similarity_calculation(feat_k, proto, sim_weight_k) # n x h x w
+
+        sim_q = F.interpolate(sim_q.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
+        sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
+
         # pseudo mask generation for segmentation
         seg_label = self.pseudo_mask_generation(sim_k, mask)
         # classification digit & label generation
         digit, cls_label = self.prototype_generation(feat_q, sim_q.detach(), mask) # nx4x256, nx4
         # sgementation head
         seg_feat = self.segmentation_head(seg_feat)
+        seg_feat = F.interpolate(seg_feat, size=(H, W), mode='bilinear')
         # linear classifier
         cls_feat = self.classification_head(digit)
 
-        sim_q = F.interpolate(sim_q.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
-        sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         self._dequeue_and_enqueue(proto_k)
 
         return seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k
@@ -299,11 +305,11 @@ class BAPnetTA(SegmentationModel):
         sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
         # similarity calculation
         sim_k = self.similarity_calculation(feat_k, proto, sim_weight) # n x h x w
+        sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
         # pseudo mask generation
         pseudo = self.pseudo_mask_generation(sim_k, mask)
-        sim_k = F.interpolate(sim_k.unsqueeze(1), size=(H, W), mode='bilinear').squeeze(1)
-
-        return sim, pseudo
+        
+        return sim_k, pseudo
     
     def get_multi_similarity_map(self, img, mask):
         _, H, W = mask.size()
