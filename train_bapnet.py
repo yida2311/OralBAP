@@ -19,7 +19,8 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
 from models import BAPnet, BAPnetTA
-from utils.loss import CrossEntropyLoss, SegClsLoss
+# from utils.loss import CrossEntropyLoss, SegClsLoss
+from loss.loss_segMT import BapTALoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
@@ -114,11 +115,9 @@ def main(cfg, device, local_rank=0):
     )
     ### LOSS
     # loss_cfg = cfg.loss_cfg[cfg.loss]
-    if cfg.loss == "ce":
-        criterion = nn.CrossEntropyLoss(reduction='mean')
-    elif cfg.loss == 'bap':
+    if cfg.loss == 'bap':
         print("BAP Loss")
-        criterion = SegClsLoss(**cfg.loss_cfg[cfg.loss])
+        criterion = BapTALoss(**cfg.loss_cfg[cfg.loss])
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
     num_epochs = cfg.num_epochs

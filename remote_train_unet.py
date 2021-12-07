@@ -19,7 +19,8 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
 from models import Unet, UnetTA
-from utils.loss import CrossEntropyLoss, SegTALoss, SegMTLoss
+# from utils.loss import CrossEntropyLoss, SegTALoss, SegMTLoss
+from loss.loss_segMT import SegTALoss, SegMTLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict

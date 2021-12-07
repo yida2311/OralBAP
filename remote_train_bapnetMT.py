@@ -19,7 +19,8 @@ from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
 from models import BAPnetMT
-from utils.loss import BapMTLoss
+# from utils.loss import BapMTLoss
+from loss.loss_bapMT import BapMTLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict

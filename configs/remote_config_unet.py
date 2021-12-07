@@ -140,7 +140,7 @@ class Config:
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
         self.pseudo_output_path = out_root + 'pseudo/' + self.task_name
-        self.coarse_output_path = out_root + "corse predictions/" + self.task_name 
+        self.coarse_output_path = out_root + "coarse predictions/" + self.task_name 
         self.fine_output_path = out_root + "fine predictions/" + self.task_name 
         
         # test cfg
