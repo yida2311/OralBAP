@@ -37,7 +37,7 @@ class Config:
                 'memory_bank': {
                     'K': 1000,
                     'T': 100,
-                    'm': 0.999,
+                    'm': 0.9,
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
@@ -54,17 +54,18 @@ class Config:
                 "alpha": 1.0,
                 "beta": 1.0,
                 "gamma": 1.0,
-                "w": 0.5,
-                "use_cons_loss": True,
-                "use_size_const": False,
+                "w": 1.0,
+                "use_cons_loss": False,
+                "use_size_const": True,
                 "use_curriculum": True,
                 "sim_weight": True,
                 "aux_params":{
                     "init_t": 5.0,
                     "max_t": 10.0,
                     "mulcoef": 1.01,
-                    "cons_type": "mse", # ["mse", 'kl-div']
+                    
                 },
+                "cons_type": "mse", # ["mse", 'kl-div']
             },
         }
 
@@ -72,7 +73,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train"
+            self.task_name += "-" + "train-3"
         else:
             self.task_name += "-" + "test"
 

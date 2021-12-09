@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "unetTA"
+        self.model = "unet"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -31,7 +31,7 @@ class Config:
         self.train = train
 
         # loss config
-        self.loss = "seg_mt" # ["ce", "sce", 'ce-dice]
+        self.loss = "ce" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -42,20 +42,6 @@ class Config:
             },
             "focal": {
                 "gamma": 2,
-            },
-            "bap": {
-                "alpha": 1.0,
-                "beta": 1,
-                "w": 0.1,
-                "use_size_const": False,
-                "use_curriculum": True,
-                "sim_weight": False,
-                'sim_norm': False,
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
             },
             "seg_ta": {
                 "alpha": 1.0,
@@ -73,7 +59,7 @@ class Config:
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         if train:
-            self.task_name += "-" + "train"
+            self.task_name += "-dilate50-" + "train"
         else:
             self.task_name += "-" + "test"
 
@@ -82,7 +68,8 @@ class Config:
         train_root = root + '2.5x_tile/2.5x_640/'
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
-            "mask_dir": train_root + "std_mask/",
+            # "mask_dir": train_root + "std_mask/",
+            "mask_dir": train_root + "std_mask_dilate50/",
             "meta_file": train_root + "train.csv",
             "label": True,
         }

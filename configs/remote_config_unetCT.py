@@ -16,18 +16,6 @@ class Config:
             'in_channels': 3,
         }
 
-        # self.modelTA_cfg = {
-        #     'encoder_depth': 5,
-        #     'encoder_weights': 'imagenet',
-        #     'decoder_use_batchnorm': True,
-        #     'decoder_channels': (256, 128, 64, 64),
-        #     'decoder_attention_type': 'scse',
-        #     'in_channels': 3,
-        #     'aux_params': {
-        #         'momentum': 0.99,
-        #     },
-        # }
-
         self.forget_rate = 0.2
         self.num_gradual = 15
 

@@ -32,7 +32,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "3"
+os.environ['CUDA_VISIBLE_DEVICES'] = "2"
 SEED = 552
 seed_everything(SEED)
 

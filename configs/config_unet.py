@@ -22,7 +22,8 @@ class Config:
         train_root = root + '2.5x_tile/2.5x_640/'
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
-            "mask_dir": train_root + "std_mask/",
+            # "mask_dir": train_root + "std_mask/",
+            "mask_dir": train_root + "std_mask_dilate50/",
             "meta_file": train_root + "train.csv",
             "label": True,
         }
@@ -103,7 +104,8 @@ class Config:
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         if train:
-            self.task_name += "-" + "train"
+            # self.task_name += "-" + "train"
+            self.task_name += "-dilate50-" + "train"
         else:
             self.task_name += "-" + "test"
         # output config

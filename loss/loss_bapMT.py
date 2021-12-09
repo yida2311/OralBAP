@@ -17,6 +17,7 @@ class BapMTLoss(nn.Module):
                 beta = 1,  # cons loss weight
                 w = 0.5,
                 use_curriculum = True,
+                use_seg_sim_cons = True,
                 aux_params: Optional[dict] = None,
                 ):
         super(BapMTLoss, self).__init__()
@@ -29,6 +30,7 @@ class BapMTLoss(nn.Module):
         self.beta = beta
 
         self.use_curriculum = use_curriculum
+        self.use_seg_sim_cons = use_seg_sim_cons
         self.T = 120 
         self.w = w 
 
@@ -39,15 +41,19 @@ class BapMTLoss(nn.Module):
         seg_gt_term = self.seg_loss(seg_feat_q, gt_label)
         seg_sim_term = self.seg_loss(seg_feat_q, outputs["sim_pseudo_label"])
         seg_seg_term = self.seg_loss(seg_feat_q, outputs["seg_pseudo_label"])
-        seg_term = (1-w)*seg_gt_term + w*(seg_sim_term+seg_seg_term)/2
+        seg_term = w*(seg_sim_term+seg_seg_term)/2 + (1-w)*seg_gt_term 
 
         cls_term = self.cls_loss(outputs["cls_feat"], outputs["cls_label"])
 
-        seg_sim_feat = F.softmax(seg_feat_q, dim=1)[:, 1, ...]
         cons_seg_term = self.cons_seg_loss(seg_feat_q, outputs["seg_feat_k"])
         cons_sim_term = self.cons_loss(outputs["sim_q"], outputs["sim_k"])
-        cons_seg_sim_term = self.cons_loss(seg_sim_feat, outputs["sim_q"])
-        cons_term = (cons_seg_term+cons_sim_term+cons_seg_sim_term) / 3
+        if self.use_seg_sim_cons:
+            seg_sim_feat = F.softmax(seg_feat_q.clone().detach(), dim=1)[:, 1, ...]
+            seg_sim_feat /= seg_sim_feat.max()
+            cons_seg_sim_term = self.cons_loss(seg_sim_feat, outputs["sim_q"])
+            cons_term = (cons_seg_term+cons_sim_term+cons_seg_sim_term) / 3
+        else:
+            cons_term = (cons_seg_term+cons_sim_term) / 2
 
         loss = seg_term + self.alpha * cls_term + self.beta * cons_term
 

@@ -31,7 +31,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "6"
+os.environ['CUDA_VISIBLE_DEVICES'] = "4"
 SEED = 552
 seed_everything(SEED)
 
@@ -119,6 +119,8 @@ def main(cfg, device, local_rank=0):
         criterion = SegTALoss(**cfg.loss_cfg[cfg.loss])
     elif cfg.loss == 'seg_mt':
         criterion = SegMTLoss(**cfg.loss_cfg[cfg.loss])
+    elif cfg.loss == 'ce':
+        criterion = nn.CrossEntropyLoss(ignore_index=-1, reduction="mean")
     criterion = criterion.cuda()
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
@@ -148,7 +150,7 @@ def main(cfg, device, local_rank=0):
     writer_info = {}
 
     ### Running
-    evaluator = SlideInference(cfg.n_class, cfg.num_workers, cfg.batch_size)
+    evaluator = SlideInference(cfg.n_class, cfg.num_workers, cfg.batch_size, cfg)
     # evaluator = SlideInference(cfg.n_class, cfg.num_workers, 8)
     #===========================================================
     for epoch in tqdm(range(num_epochs)):
@@ -169,10 +171,15 @@ def main(cfg, device, local_rank=0):
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            preds, teacher_preds, pseudo = model(imgs, masks)
-            preds = F.interpolate(preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            teacher_preds = F.interpolate(teacher_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(preds, masks, teacher_preds, pseudo, epoch)
+            if cfg.model == 'unet':
+                preds = model(imgs)
+                preds = F.interpolate(preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
+                loss = criterion(preds, masks)
+            else:
+                preds, teacher_preds, pseudo = model(imgs, masks)
+                preds = F.interpolate(preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
+                teacher_preds = F.interpolate(teacher_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
+                loss = criterion(preds, masks, teacher_preds, pseudo, epoch)
             if distributed:
                 loss.backward()
                 optimizer.step()
@@ -285,11 +292,12 @@ def main(cfg, device, local_rank=0):
 
 
 class SlideInference(object):
-    def __init__(self, n_class, num_workers, batch_size):
+    def __init__(self, n_class, num_workers, batch_size, cfg):
         self.n_class = n_class
         self.num_workers = num_workers
         self.batch_size = batch_size
         self.metrics = ConfusionMatrix(n_class)
+        self.cfg = cfg
     
     def get_scores(self):
         scores = self.metrics.get_scores()
@@ -312,7 +320,10 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                preds, teacher_preds, pseudo = model.forward(imgs, masks)
+                if self.cfg.model == "unet":
+                    preds = model.forward(imgs)
+                else:
+                    preds, teacher_preds, pseudo = model.forward(imgs, masks)
                 preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 preds_np = preds.cpu().detach().numpy()
             
@@ -344,7 +355,10 @@ class SlideInference(object):
             coord = sample['coord']
             with torch.no_grad():
                 imgs = imgs.cuda()
-                preds = model.inference(imgs)
+                if self.cfg.model == "unet":
+                    preds = model(imgs)
+                else:
+                    preds = model.inference(imgs)
                 preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 preds_np = preds.cpu().detach().numpy()
             _, _, h, w = preds_np.shape
@@ -394,7 +408,7 @@ if __name__ == '__main__':
     args = argParser()
     cfg = Config(train=True)
     main(cfg, device, local_rank=local_rank)
-
+    print(cfg.task_name)
     # w_list = [0, 0.5, 1]
     # for w in w_list:
     #     cfg = Config(train=True)

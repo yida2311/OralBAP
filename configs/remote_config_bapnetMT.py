@@ -24,7 +24,7 @@ class Config:
                 'min_ratio': 0.1,
                 'momentum': 0.9,
                 'temperature': 1.0,
-                'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
+                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
@@ -37,6 +37,7 @@ class Config:
                 "beta": 1.0,
                 "w": 0.2,
                 "use_curriculum": True,
+                "use_seg_sim_cons": False,
             },
         }
 
@@ -44,7 +45,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train"
+            self.task_name += "-" + "train-2"
         else:
             self.task_name += "-" + "test"
 

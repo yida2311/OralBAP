@@ -32,7 +32,7 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "4"
+os.environ['CUDA_VISIBLE_DEVICES'] = "5"
 SEED = 552
 seed_everything(SEED)
 
@@ -428,12 +428,12 @@ if __name__ == '__main__':
     from configs.remote_config_bapnet import Config
 
     args = argParser()
-    cfg = Config(train=True)
-    main(cfg, device, local_rank=local_rank)
+    # cfg = Config(train=True)
+    # main(cfg, device, local_rank=local_rank)
 
-    # w_list = [0, 0.5, 1]
-    # for w in w_list:
-    #     cfg = Config(train=True)
-    #     cfg.loss_cfg[cfg.loss]['w'] = w
-    #     main(cfg, device, local_rank=local_rank)
+    w_list = [1, 0.5, 0]
+    for w in w_list:
+        cfg = Config(train=True)
+        cfg.loss_cfg[cfg.loss]['w'] = w
+        main(cfg, device, local_rank=local_rank)
     

@@ -22,6 +22,7 @@ class BapTALoss(nn.Module):
                 use_cons_loss = True,
                 use_curriculum = False,
                 sim_weight = True,
+                cons_type = 'mse', # 
                 aux_params: Optional[dict] = None,
                 ):
         super(BapTALoss, self).__init__()
@@ -34,7 +35,7 @@ class BapTALoss(nn.Module):
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
         if use_cons_loss:
-            if aux_params["cons_type"] == 'mse':
+            if cons_type == 'mse':
                 self.cons_loss = nn.MSELoss(reduction='mean')
             else:
                 self.cons_loss = nn.KLDivLoss(reduction='mean')
@@ -84,21 +85,27 @@ class BapTALoss(nn.Module):
 
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
-            w = epoch/self.T*(1-self.w) + self.w
-            loss =  w* loss + (1-w) * gt_term
+            weight = epoch/self.T*(1-self.w) + self.w
+            loss =  weight* loss + (1-weight) * gt_term
 
         cls_term = self.cls_loss(cls_feat, cls_label)
         loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
-            elb_term = self.size_const(1-sim_q)
-            loss += self.beta * elb_term
+            size_term = self.size_const(1-sim_q)
+            loss += self.beta * size_term
+        else:
+            target = F.softmax(seg_feat.clone().detach(), dim=1)[:,1,...]
+            target /= target.max()
+            size_term = self.cons_loss(sim_q, target) 
+            loss += self.beta * size_term
 
         if self.use_cons_loss:
-            target = F.normalize(seg_feat, dim=1)[:,1,...]
-            sim_term = self.cons_loss(sim_q, target) 
+            # target = F.normalize(seg_feat, dim=1)[:,1,...]
+            # sim_term = self.cons_loss(sim_q, target) 
             cons_term = self.cons_loss(sim_q, sim_k)
-            loss += self.gamma * (sim_term + cons_term)
+            # loss += self.gamma * (sim_term + cons_term)
+            loss += self.gamma * cons_term
         
         return loss
 
@@ -106,7 +113,7 @@ class BapTALoss(nn.Module):
 class _WeightedCELoss(nn.Module):
     def __init__(self):
         super(_WeightedCELoss, self).__init__()
-        self.ce = CrossEntropyLoss(ignore_index=-1, reduction='none')
+        self.ce = nn.CrossEntropyLoss(ignore_index=-1, reduction='none')
         
     def forward(self, input, label, weight):
         loss = self.ce(input, label)
