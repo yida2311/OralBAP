@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "unet"
+        self.model = "unetTA"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -31,7 +31,7 @@ class Config:
         self.train = train
 
         # loss config
-        self.loss = "ce" # ["ce", "sce", 'ce-dice]
+        self.loss = "seg_mt" # ["ce", "sce", 'ce-dice]
         self.loss_cfg = {
             "sce": {
                 "alpha": 1.0,
@@ -59,7 +59,7 @@ class Config:
         # task name
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         if train:
-            self.task_name += "-dilate50-" + "train"
+            self.task_name += "-dilate100-" + "train"
         else:
             self.task_name += "-" + "test"
 
@@ -69,7 +69,7 @@ class Config:
         self.trainset_cfg = {
             "img_dir": train_root + "patch/",
             # "mask_dir": train_root + "std_mask/",
-            "mask_dir": train_root + "std_mask_dilate50/",
+            "mask_dir": train_root + "std_mask_dilate100/",
             "meta_file": train_root + "train.csv",
             "label": True,
         }

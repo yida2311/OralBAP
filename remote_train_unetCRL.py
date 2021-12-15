@@ -18,21 +18,20 @@ from torch.optim import Adam
 from torch.utils.tensorboard.writer import SummaryWriter
 
 from dataset import OralDataset, OralSlide, OralDatasetSim, Transformer, TransformerVal, TransformerSim, inverseTransformerSim
-from models import BAPnet, BAPnetTA
-# from utils.loss import CrossEntropyLoss, BapTALoss
-from loss.loss_bapTA import BapTALoss
+from models import Unet, UnetTA
+from loss.loss_crl import CRLLoss
+# from utils.loss import CrossEntropyLoss, SegTALoss, SegMTLoss
 from utils.lr_scheduler import LR_Scheduler
 from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
 from utils.vis_util import class_to_RGB, RGB_mapping_to_class
 from utils.util import seed_everything, argParser, update_writer
 
-
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "4"
+os.environ['CUDA_VISIBLE_DEVICES'] = "3"
 SEED = 552
 seed_everything(SEED)
 
@@ -51,7 +50,6 @@ else:
     device = torch.device("cuda:0")
     local_rank = 0
     
-
 def main(cfg, device, local_rank=0):
     print(cfg.task_name)
     if local_rank == 0:
@@ -67,16 +65,20 @@ def main(cfg, device, local_rank=0):
             os.makedirs(cfg.coarse_output_path)
         if not os.path.exists(cfg.fine_output_path): 
             os.makedirs(cfg.fine_output_path)
-    
+
     ### MODEL INIT
-    if cfg.model == 'bapnet':
-        model = BAPnet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
-    elif cfg.model == 'bapnetTA':
-        model = BAPnetTA(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.modelTA_cfg)
+    model1 = Unet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+    model2 = Unet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+    model3 = Unet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
+
     if distributed:
-        model = model_Single2Parallel(model, device, local_rank)
+        model1 = model_Single2Parallel(model1, device, local_rank)
+        model2 = model_Single2Parallel(model2, device, local_rank)
+        model3 = model_Single2Parallel(model3, device, local_rank)
     else:
-        model.to(device)
+        model1.to(device)
+        model2.to(device)
+        model3.to(device)
     ### DATASET
     dataset_train = OralDataset(
         cfg.trainset_cfg["img_dir"],
@@ -116,10 +118,8 @@ def main(cfg, device, local_rank=0):
         transform=TransformerVal()
     )
     ### LOSS
-    # loss_cfg = cfg.loss_cfg[cfg.loss]
-    if cfg.loss == "bapTA":
-        print("BAP Loss")
-        criterion = BapTALoss(**cfg.loss_cfg[cfg.loss])
+    if cfg.loss == 'crl':
+        criterion = CRLLoss(**cfg.loss_cfg[cfg.loss])
     criterion = criterion.cuda()
     ### SOLVER
     acc_step = cfg.acc_step   # for gradient accumulation
@@ -128,10 +128,14 @@ def main(cfg, device, local_rank=0):
     evaluation = cfg.evaluation
     val_vis = cfg.val_vis
     batch_time = AverageMeter("BatchTime", ':3.3f')
-    optimizer = Adam(model.parameters(), lr=learning_rate, weight_decay=5e-4)
+    optimizer1 = Adam(model1.parameters(), lr=learning_rate, weight_decay=5e-4)
+    optimizer2 = Adam(model2.parameters(), lr=learning_rate, weight_decay=5e-4)
+    optimizer3 = Adam(model3.parameters(), lr=learning_rate, weight_decay=5e-4)
     scheduler = LR_Scheduler(cfg.scheduler, learning_rate, num_epochs, len(dataloader_train))
-    seg_metrics = ConfusionMatrix(cfg.n_class)
-    cls_metrics = ConfusionMatrix(cfg.n_class)
+    metrics1 = ConfusionMatrix(cfg.n_class)
+    metrics2 = ConfusionMatrix(cfg.n_class)
+    metrics3 = ConfusionMatrix(cfg.n_class)
+
     best_pred_fine = 0.0
     best_epoch = 0
     print("start training......")
@@ -154,14 +158,20 @@ def main(cfg, device, local_rank=0):
     # evaluator = SlideInference(cfg.n_class, cfg.num_workers, 8)
     #===========================================================
     for epoch in tqdm(range(num_epochs)):
-        optimizer.zero_grad()
+        optimizer1.zero_grad()
+        optimizer2.zero_grad()
+        optimizer3.zero_grad()
         num_batch = len(dataloader_train)
         tbar = tqdm(dataloader_train)
-        train_loss = 0
+        train_loss1 = 0
+        train_loss2 = 0
+        train_loss3 = 0
 
         ### Training
         start_time = time.time()
-        model.train()
+        model1.train()
+        model2.train()
+        model3.train()
         for i_batch, sample in enumerate(tbar):
             # input
             imgs = sample['image']
@@ -170,65 +180,88 @@ def main(cfg, device, local_rank=0):
             masks_npy = np.array(masks.clone().detach())
             masks = masks.cuda()
             # train
-            lr = scheduler(optimizer, i_batch, epoch)
-            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-            seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, masks, epoch) 
-            
+            preds1 = model1(imgs)
+            preds2 = model2(imgs)
+            preds3 = model3(imgs)
+            preds1 = F.interpolate(preds1, size=(masks.size(1), masks.size(2)), mode='bilinear')
+            preds2 = F.interpolate(preds2, size=(masks.size(1), masks.size(2)), mode='bilinear')
+            preds3 = F.interpolate(preds3, size=(masks.size(1), masks.size(2)), mode='bilinear')
+            loss1, loss2, loss3 = criterion(preds1, preds2, preds3, masks, epoch)
             if distributed:
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
+                loss1.backward()
+                optimizer1.step()
+                optimizer1.zero_grad()
+                loss2.backward()
+                optimizer2.step()
+                optimizer2.zero_grad()
+                loss3.backward()
+                optimizer3.step()
+                optimizer3.zero_grad()
             else:
-                loss = loss / acc_step
-                loss.backward()
+                loss1 = loss1 / acc_step
+                loss1.backward()
+                loss2 = loss2 / acc_step
+                loss2.backward()
+                loss3 = loss3 / acc_step
+                loss3.backward()
         
                 if i_batch%acc_step == 0 or i_batch==len(dataset_train)-1:
-                    optimizer.step()
-                    optimizer.zero_grad()
+                    optimizer1.step()
+                    optimizer1.zero_grad()
+                    optimizer2.step()
+                    optimizer2.zero_grad()
+                    optimizer3.step()
+                    optimizer3.zero_grad()
 
             # output
-            train_loss += loss.item()
-            outputs = seg_preds.cpu().detach().numpy()
-            predictions = np.argmax(outputs, axis=1)
-            seg_metrics.update(masks_npy, predictions)
-            seg_scores_train = seg_metrics.get_scores()
-            cls_label = cls_label.cpu().detach().numpy()
-            cls_predictions = np.argmax(cls_preds.cpu().detach().numpy(), axis=1)
-            cls_metrics.update(cls_label, cls_predictions)
-            cls_scores_train = cls_metrics.get_scores()
+            train_loss1 += loss1.item()
+            train_loss2 += loss2.item()
+            train_loss3 += loss3.item()
+            outputs1 = preds1.cpu().detach().numpy()
+            outputs2 = preds2.cpu().detach().numpy()
+            outputs3 = preds3.cpu().detach().numpy()
+            predictions1 = np.argmax(outputs1, axis=1)
+            predictions2 = np.argmax(outputs2, axis=1)
+            predictions3 = np.argmax(outputs3, axis=1)
+            metrics1.update(masks_npy, predictions1)
+            metrics2.update(masks_npy, predictions2)
+            metrics3.update(masks_npy, predictions3)
+            scores_train1 = metrics1.get_scores()
+            scores_train2 = metrics2.get_scores()
+            scores_train3 = metrics3.get_scores()
 
             batch_time.update(time.time()-start_time)
             start_time = time.time()
             if i_batch % 50 == 1 and local_rank == 0:
-                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f' % 
-                            (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], batch_time.avg))
+                tbar.set_description('Train loss1: %.4f; loss2: %.4f; loss3: %.4f; mIoU1: %.4f; mIoU2: %.4f; mIoU3: %.4f; batch time: %.2f' % 
+                            (train_loss1 / (i_batch + 1), train_loss2 / (i_batch + 1), train_loss3 / (i_batch + 1), 
+                            scores_train1["mIoU"], scores_train2["mIoU"], scores_train3["mIoU"], batch_time.avg))
             # break
-        seg_metrics.reset()
-        cls_metrics.reset()
+        metrics1.reset()
+        metrics2.reset()
+        metrics3.reset()
         batch_time.reset() 
 
         ### Evaluation
         if evaluation and epoch % 5 == 4 and local_rank == 0:
             with torch.no_grad():
-                model.eval()
+                model1.eval()
                 # Coarse
                 print("evaluating coarse...")
                 num_slides = len(dataset_coarse.slides)
                 tbar2 = tqdm(range(num_slides))
                 start_time = time.time()
                 for i in tbar2:
-                    pred = evaluator.val(dataset_coarse, model, i)
-                    seg_scores_coarse, cls_scores_coarse = evaluator.get_scores()
+                    pred = evaluator.val(dataset_coarse, model1, i)
+                    scores_coarse = evaluator.get_scores()
                     batch_time.update(time.time()-start_time)
-                    tbar2.set_description('coarse seg mIoU: %.4f; cls F1: %.4f; slide time: %.2f' % 
-                                            (seg_scores_coarse["mIoU"], cls_scores_coarse['mF1'], batch_time.avg))
+                    tbar2.set_description('coarse mIoU: %.4f; slide time: %.2f' % 
+                                            (scores_coarse["mIoU"], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
                     # break
-                    
                 batch_time.reset()
-                seg_scores_coarse, cls_scores_coarse = evaluator.get_scores()
+                scores_coarse = evaluator.get_scores()
                 evaluator.reset_metrics()
 
                 # Fine
@@ -237,83 +270,74 @@ def main(cfg, device, local_rank=0):
                 tbar3 = tqdm(range(num_slides))
                 start_time = time.time()
                 for i in tbar3:
-                    pred = evaluator.val(dataset_fine, model, i)
-                    seg_scores_fine, cls_scores_fine = evaluator.get_scores()
+                    pred = evaluator.val(dataset_fine, model1, i)
+                    scores_fine = evaluator.get_scores()
                     batch_time.update(time.time()-start_time)
-                    tbar3.set_description('fine seg mIoU: %.4f; cls F1: %.4f; slide time: %.2f' % 
-                                            (seg_scores_fine["mIoU"], cls_scores_fine['mF1'], batch_time.avg))
+                    tbar3.set_description('fine mIoU: %.4f; slide time: %.2f' % 
+                                            (scores_fine["mIoU"], batch_time.avg))
                     # writer_info.update(mask=mask_rgb, prediction=predictions_rgb)
                     start_time = time.time()
                     # break
                     
                 batch_time.reset()
-                seg_scores_fine, cls_scores_fine = evaluator.get_scores()
+                scores_fine = evaluator.get_scores()
                 evaluator.reset_metrics()
 
                 # Save Model
-                best_pred_fine, best_epoch = save_ckpt_model(model, cfg, seg_scores_fine['mIoU'], best_pred_fine, best_epoch, epoch)
+                best_pred_fine, best_epoch = save_ckpt_model(model1, cfg, scores_fine['mIoU'], best_pred_fine, best_epoch, epoch)
                 # Log
-                update_log(f_log, cfg, seg_scores_train, cls_scores_train, 
-                            seg_scores_coarse, cls_scores_coarse, epoch, 
-                            seg_scores_fine=seg_scores_fine, cls_scores_fine=cls_scores_fine)   
+                update_log(f_log, cfg, scores_train1, scores_coarse, epoch, 
+                            scores_fine=scores_fine)   
                 log = '\n=>Epoches %i, best fine = %.4f, best epoch = %i \n\n' % (epoch, best_pred_fine, best_epoch)
                 print(log)
                 f_log.write(log)
                 f_log.flush()
                 # Writer  
-                thresh = model.thresh.cpu().item()
                 writer_info.update(
                         # lr=optimizer.param_groups[0]['lr'],
-                        thresh=thresh,
-                        loss=train_loss/len(tbar),
-                        train_mIoU=seg_scores_train['mIoU'],
-                        coarse_mIoU=seg_scores_coarse['mIoU'],
-                        fine_mIoU=seg_scores_fine['mIoU'], 
-                        train_mF1=cls_scores_train['mF1'],
-                        coarse_mF1=cls_scores_coarse['mF1'],
-                        fine_mF1=cls_scores_fine['mF1'],
+                        loss=train_loss1/len(tbar),
+                        train_mIoU=scores_train1['mIoU'],
+                        coarse_mIoU=scores_coarse['mIoU'],
+                        fine_mIoU=scores_fine['mIoU'], 
                 )
                 update_writer(writer, writer_info, epoch)
-
+        # break
     if local_rank == 0:     
         f_log.close() 
 
     # Generate best results based best epoch
     print("Output prediction results based on best model")
     ckpt_path = os.path.join(cfg.model_path, "%s-best-fine.pth"%(cfg.model+'-'+cfg.encoder))
-    model = model_load_state_dict(model, ckpt_path=ckpt_path, distributed=distributed)
+    model = model_load_state_dict(model1, ckpt_path=ckpt_path, distributed=distributed)
     if local_rank == 0:
         with torch.no_grad():
             num_slides = len(dataset_coarse.slides)
             for i in range(num_slides):
-                pred_rgb = evaluator.inference(dataset_coarse, model, i)
+                pred_rgb = evaluator.inference(dataset_coarse, model1, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.coarse_output_path, dataset_coarse.slide+'.png'), pred_rgb)
                 # break
             num_slides = len(dataset_fine.slides)
             for i in range(num_slides):
-                pred_rgb = evaluator.inference(dataset_fine, model, i)
+                pred_rgb = evaluator.inference(dataset_fine, model1, i)
                 pred_rgb = cv2.cvtColor(pred_rgb, cv2.COLOR_BGR2RGB)
                 cv2.imwrite(os.path.join(cfg.fine_output_path, dataset_fine.slide+'.png'), pred_rgb)
                 # break
 
-              
+
 class SlideInference(object):
     def __init__(self, n_class, num_workers, batch_size):
         self.n_class = n_class
         self.num_workers = num_workers
         self.batch_size = batch_size
-        self.seg_metrics = ConfusionMatrix(n_class)
-        self.cls_metrics = ConfusionMatrix(n_class)
+        self.metrics = ConfusionMatrix(n_class)
     
     def get_scores(self):
-        seg_scores = self.seg_metrics.get_scores()
-        cls_scores = self.cls_metrics.get_scores()
-        return seg_scores, cls_scores
+        scores = self.metrics.get_scores()
+        return scores
     
     def reset_metrics(self):
-        self.seg_metrics.reset()
-        self.cls_metrics.reset()
+        self.metrics.reset()
     
     def val(self, dataset, model, inds):
         dataset.get_patches_from_index(inds)
@@ -329,26 +353,22 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-                seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
-                seg_preds_np = seg_preds.cpu().detach().numpy()
+                preds = model.forward(imgs)
+                preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
+                preds_np = preds.cpu().detach().numpy()
             
-            cls_predictions = np.argmax(cls_preds.cpu().detach().numpy(), axis=1)
-            cls_label = cls_label.cpu().detach().numpy()
-            self.cls_metrics.update(cls_label, cls_predictions)
-
-            _, _, h, w = seg_preds_np.shape
+            _, _, h, w = preds_np.shape
             for i in range(imgs.shape[0]):
                 x = math.floor(coord[0][i] * step[0])
                 y = math.floor(coord[1][i] * step[1])
-                output[:, x:x+h, y:y+w] += seg_preds_np[i]
+                output[:, x:x+h, y:y+w] += preds_np[i]
                 template[x:x+h, y:y+w] += np.ones((h, w), dtype='uint8')
     
         template[template==0] = 1
         output = output / template
         prediction = np.argmax(output, axis=0)
         slide_mask = dataset.get_slide_mask_from_index(inds)
-        self.seg_metrics.update(slide_mask, prediction)
+        self.metrics.update(slide_mask, prediction)
 
         return class_to_RGB(prediction)
 
@@ -365,7 +385,8 @@ class SlideInference(object):
             coord = sample['coord']
             with torch.no_grad():
                 imgs = imgs.cuda()
-                preds = model.inference(imgs)
+                # preds = model.inference(imgs)
+                preds = model(imgs)
                 preds = F.interpolate(preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 preds_np = preds.cpu().detach().numpy()
             _, _, h, w = preds_np.shape
@@ -382,42 +403,27 @@ class SlideInference(object):
         return class_to_RGB(prediction)
 
 
-def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse, cls_scores_coarse, epoch, seg_scores_fine=None, cls_scores_fine=None):
+def update_log(f_log, cfg, scores_train, scores_coarse, epoch, scores_fine=None):
     log = ""
-    log = log + 'epoch [{}/{}] mIoU: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, seg_scores_train['mIoU'], seg_scores_coarse['mIoU'], seg_scores_fine['mIoU']) + "\n"
-    log = log + 'epoch [{}/{}] mF1: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, cls_scores_train['mF1'], cls_scores_coarse['mF1'], cls_scores_fine['mF1']) + "\n"
+    log = log + 'epoch [{}/{}] mIoU: train = {:.4f}, coarse = {:.4f}, fine = {:.4f}'.format(epoch, cfg.num_epochs, scores_train['mIoU'], scores_coarse['mIoU'], scores_fine['mIoU']) + "\n"
     
     log = log + "   Seg metric   \n"
-    log = log + "    [train] IoU = " + str(seg_scores_train['IoU']) + "\n"
-    log = log + "    [train] Accuracy_mean = " + str(seg_scores_train['mAcc'])  + "\n"
-    log = log + "    [train] Precision = " + str(seg_scores_train['Precision']) + "\n"
-    log = log + "    [train] Recall = " + str(seg_scores_train['Recall']) + "\n"
+    log = log + "    [train] IoU = " + str(scores_train['IoU']) + "\n"
+    log = log + "    [train] Accuracy_mean = " + str(scores_train['mAcc'])  + "\n"
+    log = log + "    [train] Precision = " + str(scores_train['Precision']) + "\n"
+    log = log + "    [train] Recall = " + str(scores_train['Recall']) + "\n"
     log = log + "    ------------------------------------ \n"
-    log = log + "    [coarse] IoU = " + str(seg_scores_coarse['IoU']) + "\n"
-    log = log + "    [coarse] Accuracy_mean = " + str(seg_scores_coarse['mAcc'])  + "\n"
-    log = log + "    [coarse] Precision = " + str(seg_scores_coarse['Precision']) + "\n"
-    log = log + "    [coarse] Recall = " + str(seg_scores_coarse['Recall']) + "\n"
-    if seg_scores_fine:
+    log = log + "    [coarse] IoU = " + str(scores_coarse['IoU']) + "\n"
+    log = log + "    [coarse] Accuracy_mean = " + str(scores_coarse['mAcc'])  + "\n"
+    log = log + "    [coarse] Precision = " + str(scores_coarse['Precision']) + "\n"
+    log = log + "    [coarse] Recall = " + str(scores_coarse['Recall']) + "\n"
+    if scores_fine:
         log = log + "    ------------------------------------ \n"
-        log = log + "    [fine] IoU = " + str(seg_scores_fine['IoU']) + "\n"
-        log = log + "    [fine] Accuracy_mean = " + str(seg_scores_fine['mAcc'])  + "\n"
-        log = log + "    [fine] Precision = " + str(seg_scores_fine['Precision']) + "\n"
-        log = log + "    [fine] Recall = " + str(seg_scores_fine['Recall']) + "\n"
+        log = log + "    [fine] IoU = " + str(scores_fine['IoU']) + "\n"
+        log = log + "    [fine] Accuracy_mean = " + str(scores_fine['mAcc'])  + "\n"
+        log = log + "    [fine] Precision = " + str(scores_fine['Precision']) + "\n"
+        log = log + "    [fine] Recall = " + str(scores_fine['Recall']) + "\n"
     
-    log = log + "\n   Cls metric   \n"
-    log = log + "    [train] F1 = " + str(cls_scores_train['F1']) + "\n"
-    log = log + "    [train] Precision = " + str(cls_scores_train['Precision']) + "\n"
-    log = log + "    [train] Recall = " + str(cls_scores_train['Recall']) + "\n"
-    log = log + "    ------------------------------------ \n"
-    log = log + "    [coarse] F1 = " + str(cls_scores_coarse['IoU']) + "\n"
-    log = log + "    [coarse] Precision = " + str(cls_scores_coarse['Precision']) + "\n"
-    log = log + "    [coarse] Recall = " + str(cls_scores_coarse['Recall']) + "\n"
-    if seg_scores_fine:
-        log = log + "    ------------------------------------ \n"
-        log = log + "    [fine] F1 = " + str(cls_scores_fine['F1']) + "\n"
-        log = log + "    [fine] Precision = " + str(cls_scores_fine['Precision']) + "\n"
-        log = log + "    [fine] Recall = " + str(cls_scores_fine['Recall']) + "\n"
-   
     log += "================================\n"
     print(log)
     f_log.write(log)
@@ -425,15 +431,35 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
 
 
 if __name__ == '__main__':
-    from configs.remote_config_bapnet import Config
+    from configs.remote_config_unetCRL import Config
 
     args = argParser()
     cfg = Config(train=True)
     main(cfg, device, local_rank=local_rank)
+    print(cfg.task_name)
 
-    # w_list = [1, 0.5, 0]
-    # for w in w_list:
+    # rate_list = [0.1, 0.2, 0.5]
+    # for i, rate in enumerate(rate_list):
     #     cfg = Config(train=True)
-    #     cfg.loss_cfg[cfg.loss]['w'] = w
+    #     cfg.forget_rate = rate
+    #     cfg.task_name = cfg.task_name + "-" + str(i)
     #     main(cfg, device, local_rank=local_rank)
+    #     print(cfg.task_name)
     
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

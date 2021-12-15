@@ -34,6 +34,8 @@ class BapTALoss(nn.Module):
         self.cls_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
+        else:
+            self.elb_loss = nn.MSELoss(reduction='mean')
         if use_cons_loss:
             if cons_type == 'mse':
                 self.cons_loss = nn.MSELoss(reduction='mean')
@@ -95,16 +97,12 @@ class BapTALoss(nn.Module):
             size_term = self.size_const(1-sim_q)
             loss += self.beta * size_term
         else:
-            target = F.softmax(seg_feat.clone().detach(), dim=1)[:,1,...]
-            target /= target.max()
-            size_term = self.cons_loss(sim_q, target) 
+            target = torch.tensor(seg_label==1, dtype=torch.float)
+            size_term = self.elb_loss(sim_q, target) 
             loss += self.beta * size_term
 
         if self.use_cons_loss:
-            # target = F.normalize(seg_feat, dim=1)[:,1,...]
-            # sim_term = self.cons_loss(sim_q, target) 
             cons_term = self.cons_loss(sim_q, sim_k)
-            # loss += self.gamma * (sim_term + cons_term)
             loss += self.gamma * cons_term
         
         return loss
