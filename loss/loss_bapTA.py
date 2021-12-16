@@ -17,41 +17,46 @@ class BapTALoss(nn.Module):
                 alpha = 1.0, # for cls loss
                 beta = 1.0, # for size const loss
                 gamma = 1.0, # for cons loss
+                delta = 1.0, # for sim loss
                 w = 0.5,  # for curriculum learning
                 use_size_const = False,
                 use_cons_loss = True,
+                use_sim_loss = False,
                 use_curriculum = False,
-                sim_weight = True,
+                use_sim_weight = True,
                 cons_type = 'mse', # 
                 aux_params: Optional[dict] = None,
                 ):
         super(BapTALoss, self).__init__()
         self.gt_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        if sim_weight:
+        if use_sim_weight:
             self.seg_loss = _WeightedCELoss()
         else:
             self.seg_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
         self.cls_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
         if use_size_const:
             self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
-        else:
-            self.elb_loss = nn.MSELoss(reduction='mean')
         if use_cons_loss:
             if cons_type == 'mse':
                 self.cons_loss = nn.MSELoss(reduction='mean')
             else:
-                self.cons_loss = nn.KLDivLoss(reduction='mean')
+                self.cons_loss = kl_loss
+        if use_sim_loss:
+            if cons_type == "mse":
+                self.sim_loss = nn.MSELoss(reduction='mean')
+            else:
+                self.sim_loss = kl_loss
 
         self.alpha = alpha
         self.beta = beta
         self.gamma = gamma
+        self.delta = delta
         self.use_size_const = use_size_const
         self.use_cons_loss = use_cons_loss
+        self.use_sim_loss = use_sim_loss
         self.use_curriculum = use_curriculum
+        self.use_sim_weight = use_sim_weight
 
-        self.init_t = aux_params['init_t']
-        self.max_t = aux_params['max_t']
-        self.sim_weight = sim_weight
         self.T = 120 
         self.w = w
     
@@ -76,36 +81,44 @@ class BapTALoss(nn.Module):
         return loss
     
     def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k, gt_label, epoch):
-        if self.sim_weight:
+        loss_term = dict()
+        if self.use_sim_weight:
             weight = sim_q.clone().detach()
             weight[gt_label==1] = 1
             weight[seg_label!=1] = 1 - weight[seg_label!=1]
             seg_term = self.seg_loss(seg_feat, seg_label, weight)
         else:
             seg_term = self.seg_loss(seg_feat, seg_label)
+        loss_term["pseudo_seg_loss"] = seg_term.item()
         loss = seg_term
 
         if self.use_curriculum:
             gt_term = self.gt_loss(seg_feat, gt_label)
-            weight = epoch/self.T*(1-self.w) + self.w
-            loss =  weight* loss + (1-weight) * gt_term
+            loss_term["gt_seg_loss"] = gt_term.item()
+            w = epoch/self.T*(1-self.w) + self.w
+            loss =  w* loss + (1-w) * gt_term 
 
         cls_term = self.cls_loss(cls_feat, cls_label)
+        loss_term["cls_loss"] = cls_term.item()
         loss = loss + self.alpha * cls_term
 
         if self.use_size_const:
             size_term = self.size_const(1-sim_q)
-            loss += self.beta * size_term
-        else:
-            target = torch.tensor(seg_label==1, dtype=torch.float)
-            size_term = self.elb_loss(sim_q, target) 
+            loss_term["size_loss"] = size_term.item()
             loss += self.beta * size_term
 
         if self.use_cons_loss:
             cons_term = self.cons_loss(sim_q, sim_k)
+            loss_term["cons_loss"] = cons_term.item()
             loss += self.gamma * cons_term
         
-        return loss
+        if self.use_sim_loss:
+            target = (seg_label==1).clone().detach().float()
+            sim_term = self.sim_loss(sim_q, target) 
+            loss_term["sim_loss"] = sim_term.item()
+            loss += self.delta * sim_term
+        
+        return loss, loss_term
 
 
 class _WeightedCELoss(nn.Module):
@@ -183,7 +196,15 @@ class _ExtendedLBLoss(nn.Module):
         return loss
 
 
-
+def kl_loss(input_logits, target_logits):
+    """input_logits: N x H x W"""
+    assert input_logits.size() == target_logits.size()
+    input_log = torch.log(torch.clamp(input_logits, min=1e-4))
+    input_fg_log = torch.log(torch.clamp(1-input_logits, min=1e-4))
+    target = torch.clamp(target_logits, min=1e-4)
+    target_fg = torch.clamp(1-target_logits, min=1e-4)
+    loss = F.kl_div(input_log, target, size_average=True) + F.kl_div(input_fg_log, target_fg, size_average=True)
+    return loss / 2
 
 
 

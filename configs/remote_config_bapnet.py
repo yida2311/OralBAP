@@ -37,7 +37,7 @@ class Config:
                 'memory_bank': {
                     'K': 1000,
                     'T': 100,
-                    'm': 0.99,
+                    'm': 0.9,
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
@@ -53,19 +53,20 @@ class Config:
             "bapTA": {
                 "alpha": 1.0,
                 "beta": 1.0,
-                "gamma": 1.0,
+                "gamma": 10.0,
+                "delta": 1.0,
                 "w": 1.0,
                 "use_cons_loss": True,
+                "use_sim_loss": True,
                 "use_size_const": False,
                 "use_curriculum": True,
-                "sim_weight": True,
+                "use_sim_weight": True,
+                "cons_type": "mse", # ["mse", 'kl-div']
                 "aux_params":{
                     "init_t": 5.0,
                     "max_t": 10.0,
                     "mulcoef": 1.01,
-                    
                 },
-                "cons_type": "kld", # ["mse", 'kl-div']
             },
         }
 
@@ -73,7 +74,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train-2"
+            self.task_name += "-" + "train-q-3"
         else:
             self.task_name += "-" + "test"
 
@@ -127,8 +128,8 @@ class Config:
         self.batch_size = 12
         self.acc_step = 1
         self.ckpt_path = None
-        if not train:
-            self.ckpt_path = 'results/saved_models/bapnet-bap1-[11-13-15]-train/bapnet-resnet34-best-fine.pth' # pretrained model
+        if train:
+            self.ckpt_path = 'results-v2/saved_models/bapnetTA-bapTA-[12-14-05]-train/bapnetTA-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
