@@ -4,7 +4,7 @@ import json
 class Config:
     def __init__(self, train=True):
         # model config
-        self.model = "bapnetTA"
+        self.model = "bapnet"
         self.encoder = "resnet34"  
         self.n_class = 4
         self.model_cfg = {
@@ -17,32 +17,13 @@ class Config:
             'aux_params': {
                 'memory_bank': {
                     'K': 1000,
-                    'T': 100,
+                    'T': 20,
                     'm': 0.9,
                 },
                 'min_ratio': 0.1,
                 'momentum': 0.9,
                 'temperature': 1.0,
                 'weight_type': 'softmax',  # 'softmax', 'weighted', 'mean'
-            }
-        }
-        self.modelTA_cfg = {
-            'encoder_depth': 5,
-            'encoder_weights': 'imagenet',
-            'decoder_use_batchnorm': True,
-            'decoder_channels': (256, 128, 64, 64),
-            'decoder_attention_type': 'scse',
-            'in_channels': 3,
-            'aux_params': {
-                'memory_bank': {
-                    'K': 1000,
-                    'T': 100,
-                    'm': 0.9,
-                },
-                'min_ratio': 0.1,
-                'momentum': 0.9,
-                'temperature': 1.0,
-                'weight_type': 'weighted',  # 'softmax', 'weighted', 'mean'
             }
         }
         self.train = train
@@ -53,12 +34,12 @@ class Config:
             "bapTA": {
                 "alpha": 1.0,
                 "beta": 1.0,
-                "gamma": 10.0,
-                "delta": 1.0,
+                "gamma": 50.0,
+                "delta": 0.2,
                 "w": 1.0,
-                "use_cons_loss": True,
-                "use_sim_loss": True,
-                "use_size_const": False,
+                "use_cons_loss": False,
+                "use_sim_loss": False,
+                "use_size_const": True,
                 "use_curriculum": True,
                 "use_sim_weight": True,
                 "cons_type": "mse", # ["mse", 'kl-div']
@@ -74,7 +55,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train-q-3"
+            self.task_name += "-" + "train"
         else:
             self.task_name += "-" + "test"
 

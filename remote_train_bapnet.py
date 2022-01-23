@@ -26,30 +26,6 @@ from utils.metric import ConfusionMatrix, AverageMeter
 from utils.state_dict import model_Single2Parallel, save_ckpt_model, model_load_state_dict
 from utils.vis_util import class_to_RGB, RGB_mapping_to_class
 from utils.util import seed_everything, argParser, update_writer
-
-
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.benchmark = True
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
-os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-os.environ['CUDA_VISIBLE_DEVICES'] = "4"
-SEED = 552
-seed_everything(SEED)
-
-distributed = False
-# if torch.cuda.device_count() > 1:
-#     distributed = True
-if distributed:
-    # DPP 1
-    dist.init_process_group('nccl')
-    # DPP 2
-    local_rank = dist.get_rank()
-    print(local_rank)
-    torch.cuda.set_device(local_rank)
-    device = torch.device('cuda', local_rank)
-else:
-    device = torch.device("cuda:0")
-    local_rank = 0
     
 
 def main(cfg, device, local_rank=0):
@@ -172,8 +148,9 @@ def main(cfg, device, local_rank=0):
             # train
             lr = scheduler(optimizer, i_batch, epoch)
             seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
+            # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward_without_bank(imgs, masks)
             seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, masks, epoch) 
+            loss, _ = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, masks, epoch) 
             
             if distributed:
                 loss.backward()
@@ -330,6 +307,7 @@ class SlideInference(object):
                 imgs = imgs.cuda()
                 masks = masks.cuda()
                 seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
+                # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward_without_bank(imgs, masks)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
@@ -426,6 +404,29 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
 
 if __name__ == '__main__':
     from configs.remote_config_bapnet import Config
+
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True
+    os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+    os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = "2"
+    SEED = 552
+    seed_everything(SEED)
+
+    distributed = False
+    # if torch.cuda.device_count() > 1:
+    #     distributed = True
+    if distributed:
+        # DPP 1
+        dist.init_process_group('nccl')
+        # DPP 2
+        local_rank = dist.get_rank()
+        print(local_rank)
+        torch.cuda.set_device(local_rank)
+        device = torch.device('cuda', local_rank)
+    else:
+        device = torch.device("cuda:0")
+        local_rank = 0
 
     args = argParser()
     cfg = Config(train=True)

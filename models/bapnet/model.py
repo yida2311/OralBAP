@@ -237,6 +237,49 @@ class BAPnet(SegmentationModel):
         cls_feat = self.classification_head(digit)
 
         return seg_feat, seg_label, cls_feat, cls_label, sim, None
+    
+    def forward_without_bank(self, img, mask):
+        N, H, W = mask.size()
+        encoder_feats = self.encoder(img) # [x1,x2,x4,x8,x16,x32]
+        seg_feat, feat = self.decoder(*encoder_feats) # x2[64], x16[256] 
+        # background proto
+        proto_k, proto_k_state = self.background_prototype_generation(feat, mask)
+        # proto selection for similarity calculation
+        proto = self.prototype_selection() #  100 x 256
+
+        # # sim weight
+        # # sim_weight = self.similarity_weight(proto, proto_k, proto_k_state)
+        # # similarity calculation
+        # sim = self.similarity_calculation(feat, proto, sim_weight) # n x h x w
+
+        ## replaced by without memory bank version
+        proto_final = torch.ones((N, self.dim), dtype=torch.float).cuda()
+        fill_num = N - proto_k_state.sum()
+        # print(fill_num, proto_final.size(), proto.size())
+        proto_final[proto_k_state] = proto_k
+        proto_final[~proto_k_state] = proto.T[:fill_num]
+
+        # normalize
+        _, c, h, w = feat.size()
+        feature = F.normalize(feat, dim=1)
+        # similarity matrix
+        feature = feature.view(N, c, -1)  # (Nhw) x 256
+        sim = F.relu(torch.bmm(proto_final.unsqueeze(1), feature))  # N x 1 x hw
+        sim = sim.view(N, 1, h, w).detach()
+        sim = F.interpolate(sim, size=(H, W), mode='bilinear').squeeze(1)
+
+        # pseudo mask generation
+        seg_label = self.pseudo_mask_generation(sim, mask)
+        # prototype generation
+        digit, cls_label = self.prototype_generation(feat, sim, mask) # nx4x256, nx4
+        self._dequeue_and_enqueue(proto_k)
+        # sgementation head
+        seg_feat = self.segmentation_head(seg_feat)
+        seg_feat = F.interpolate(seg_feat, size=(H, W), mode='bilinear')
+        # linear classifier
+        cls_feat = self.classification_head(digit)
+
+        return seg_feat, seg_label, cls_feat, cls_label, sim, None
 
     def inference(self, img):
         _, _, H, W = img.size()
