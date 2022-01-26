@@ -10,22 +10,20 @@ class BapTALoss(nn.Module):
     Hybrid Loss for BapnetTA: 
         Segmentation Loss: gt seg loss + sim-pseudo seg loss 
         Classification Loss: cls loss
-        Consistency Loss: seg consistency loss + sim consisitency loss + seg-sim consistency
+        Consistency Loss: sim consisitency loss 
         (potential) Size Const Loss: log-barrier
     """
     def __init__(self,
                 alpha = 1.0, # for cls loss
-                beta = 1.0, # for size const loss
-                gamma = 1.0, # for cons loss
-                delta = 1.0, # for sim loss
+                beta = 1.0, # for sim cons loss
+                gamma = 1.0, # for feat cons loss
                 w = 0.5,  # for curriculum learning
-                use_size_const = False,
-                use_cons_loss = True,
-                use_sim_loss = False,
+                use_cls_loss = True,
+                use_sim_cons_loss = True,
+                use_feat_cons_loss = True,
                 use_curriculum = False,
                 use_sim_weight = True,
                 cons_type = 'mse', # 
-                aux_params: Optional[dict] = None,
                 ):
         super(BapTALoss, self).__init__()
         self.gt_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
@@ -34,53 +32,29 @@ class BapTALoss(nn.Module):
         else:
             self.seg_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
         self.cls_loss = nn.CrossEntropyLoss(ignore_index=-1, reduction='mean')
-        if use_size_const:
-            self.elb_loss = _ExtendedLBLoss(**aux_params)  # Extended Log-Barrier Loss
-        if use_cons_loss:
+        if use_sim_cons_loss:
             if cons_type == 'mse':
-                self.cons_loss = nn.MSELoss(reduction='mean')
+                self.sim_cons_loss = nn.MSELoss(reduction='mean')
             else:
-                self.cons_loss = kl_loss
-        if use_sim_loss:
-            if cons_type == "mse":
-                self.sim_loss = nn.MSELoss(reduction='mean')
+                self.sim_cons_loss = kl_loss
+        if use_feat_cons_loss:
+            if cons_type == 'mse':
+                self.feat_cons_loss = nn.MSELoss(reduction='mean')
             else:
-                self.sim_loss = kl_loss
-
+                self.feat_cons_loss = kl_loss
+        
         self.alpha = alpha
-        self.beta = beta
         self.gamma = gamma
-        self.delta = delta
-        self.use_size_const = use_size_const
-        self.use_cons_loss = use_cons_loss
-        self.use_sim_loss = use_sim_loss
+        self.use_cls_loss = use_cls_loss
+        self.use_sim_cons_loss = use_sim_cons_loss
+        self.use_feat_cons_loss = use_feat_cons_loss
         self.use_curriculum = use_curriculum
         self.use_sim_weight = use_sim_weight
 
         self.T = 120 
         self.w = w
     
-    def size_const(self, mask_pred):
-        """"
-        Compute the loss over the size of the mask.
-        :param mask_pred: foreground predicted mask, shape: (n, 1, h, w)
-        """
-        assert mask_pred.ndim == 3
-        # background
-        bgmask = 1 - mask_pred
-        bs, h, w = mask_pred.size()
-        l1_bg = torch.abs(bgmask.contiguous().view(bs, -1)).sum(dim=1)
-        l1_bg = l1_bg / float(h*w) 
-        loss_bg = self.elb_loss(-l1_bg)
-        # foreground
-        l1_fg = torch.abs(mask_pred.contiguous().view(bs, -1)).sum(dim=1)
-        l1_fg = l1_fg / float(h*w)
-        loss_fg = self.elb_loss(-l1_fg)
-
-        loss = loss_bg + loss_fg
-        return loss
-    
-    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k, gt_label, epoch):
+    def forward(self, seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k, feat_q, feat_k, gt_label, epoch):
         loss_term = dict()
         if self.use_sim_weight:
             weight = sim_q.clone().detach()
@@ -102,21 +76,15 @@ class BapTALoss(nn.Module):
         loss_term["cls_loss"] = cls_term.item()
         loss = loss + self.alpha * cls_term
 
-        if self.use_size_const:
-            size_term = self.size_const(1-sim_q)
-            loss_term["size_loss"] = size_term.item()
-            loss += self.beta * size_term
-
-        if self.use_cons_loss:
-            cons_term = self.cons_loss(sim_q, sim_k)
-            loss_term["cons_loss"] = cons_term.item()
-            loss += self.gamma * cons_term
+        if self.use_sim_cons_loss:
+            sim_cons_term = self.sim_cons_loss(sim_q, sim_k)
+            loss_term["sim_cons_loss"] = sim_cons_term.item()
+            loss += self.beta * sim_cons_term
         
-        if self.use_sim_loss:
-            target = (seg_label==1).clone().detach().float()
-            sim_term = self.sim_loss(sim_q, target) 
-            loss_term["sim_loss"] = sim_term.item()
-            loss += self.delta * sim_term
+        if self.use_feat_cons_loss:
+            feat_cons_term = self.feat_cons_loss(sim_q, sim_k)
+            loss_term["feat_cons_loss"] = feat_cons_term.item()
+            loss += self.gamma * feat_cons_term
         
         return loss, loss_term
 

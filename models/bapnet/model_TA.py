@@ -286,7 +286,7 @@ class BAPnetTA(SegmentationModel):
         # weight compare
         # diff = torch.sum(seg_label_q!=seg_label) / (N*H*W) 
 
-        return seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k
+        return seg_feat, seg_label, cls_feat, cls_label, sim_q, sim_k, feat_q, feat_k
 
     def forward_without_bank(self, img, mask):
         N, H, W = mask.size()

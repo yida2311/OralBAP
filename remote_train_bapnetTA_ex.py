@@ -134,7 +134,7 @@ def main(cfg, device, local_rank=0):
         num_batch = len(dataloader_train)
         tbar = tqdm(dataloader_train)
         train_loss = 0
-        train_loss_term = {"pseudo_seg_loss": 0, "gt_seg_loss": 0, "cls_loss": 0, "cons_loss": 0, "sim_loss":0, "size_loss": 0}
+        train_loss_term = {"pseudo_seg_loss": 0, "gt_seg_loss": 0, "cls_loss": 0, "sim_cons_loss": 0, "feat_cons_loss":0}
 
         ### Training
         start_time = time.time()
@@ -149,9 +149,9 @@ def main(cfg, device, local_rank=0):
             # train
             lr = scheduler(optimizer, i_batch, epoch)
             # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward_without_bank(imgs, masks)
+            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
             seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss, loss_term = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, masks, epoch) 
+            loss, loss_term = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k masks, epoch) 
             
             # 
             for k, v in loss_term.items():
@@ -183,9 +183,9 @@ def main(cfg, device, local_rank=0):
             batch_time.update(time.time()-start_time)
             start_time = time.time()
             if i_batch % 50 == 1 and local_rank == 0:
-                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f; pseudo_seg_loss: %.4f; gt_seg_loss: %.4f; cons_loss: %.4f; sim_loss: %.4f; size_loss: %.4f' % 
+                tbar.set_description('Train loss: %.4f; seg mIoU: %.4f; cls F1: %.4f; batch time: %.2f; pseudo_seg_loss: %.4f; gt_seg_loss: %.4f; sim_cons_loss: %.4f; feat_cons_loss: %.4f; cls_loss: %.4f' % 
                             (train_loss / (i_batch + 1), seg_scores_train["mIoU"], cls_scores_train['mF1'], batch_time.avg,
-                            train_loss_term["pseudo_seg_loss"]/(i_batch+1), train_loss_term["gt_seg_loss"]/(i_batch+1),train_loss_term["cons_loss"]/(i_batch+1),train_loss_term["sim_loss"]/(i_batch+1), train_loss_term["size_loss"]/(i_batch+1)))
+                            train_loss_term["pseudo_seg_loss"]/(i_batch+1), train_loss_term["gt_seg_loss"]/(i_batch+1),train_loss_term["sim_cons_loss"]/(i_batch+1),train_loss_term["feat_cons_loss"]/(i_batch+1), train_loss_term["cls_loss"]/(i_batch+1)))
             # break
         seg_metrics.reset()
         cls_metrics.reset()
@@ -313,7 +313,7 @@ class SlideInference(object):
                 imgs = imgs.cuda()
                 masks = masks.cuda()
                 # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward_without_bank(imgs, masks)
+                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
@@ -374,13 +374,13 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
     log = log + "   Seg metric   \n"
     log = log + "    [train] IoU = " + str(seg_scores_train['IoU']) + "\n"
     log = log + "    [train] Accuracy_mean = " + str(seg_scores_train['mAcc'])  + "\n"
-    log = log + "    [train] Precision = " + str(seg_scores_train['Precision']) + "\n"
-    log = log + "    [train] Recall = " + str(seg_scores_train['Recall']) + "\n"
+    # log = log + "    [train] Precision = " + str(seg_scores_train['Precision']) + "\n"
+    # log = log + "    [train] Recall = " + str(seg_scores_train['Recall']) + "\n"
     log = log + "    ------------------------------------ \n"
     log = log + "    [coarse] IoU = " + str(seg_scores_coarse['IoU']) + "\n"
     log = log + "    [coarse] Accuracy_mean = " + str(seg_scores_coarse['mAcc'])  + "\n"
-    log = log + "    [coarse] Precision = " + str(seg_scores_coarse['Precision']) + "\n"
-    log = log + "    [coarse] Recall = " + str(seg_scores_coarse['Recall']) + "\n"
+    # log = log + "    [coarse] Precision = " + str(seg_scores_coarse['Precision']) + "\n"
+    # log = log + "    [coarse] Recall = " + str(seg_scores_coarse['Recall']) + "\n"
     if seg_scores_fine:
         log = log + "    ------------------------------------ \n"
         log = log + "    [fine] IoU = " + str(seg_scores_fine['IoU']) + "\n"
@@ -390,17 +390,17 @@ def update_log(f_log, cfg, seg_scores_train, cls_scores_train, seg_scores_coarse
     
     log = log + "\n   Cls metric   \n"
     log = log + "    [train] F1 = " + str(cls_scores_train['F1']) + "\n"
-    log = log + "    [train] Precision = " + str(cls_scores_train['Precision']) + "\n"
-    log = log + "    [train] Recall = " + str(cls_scores_train['Recall']) + "\n"
+    # log = log + "    [train] Precision = " + str(cls_scores_train['Precision']) + "\n"
+    # log = log + "    [train] Recall = " + str(cls_scores_train['Recall']) + "\n"
     log = log + "    ------------------------------------ \n"
     log = log + "    [coarse] F1 = " + str(cls_scores_coarse['IoU']) + "\n"
-    log = log + "    [coarse] Precision = " + str(cls_scores_coarse['Precision']) + "\n"
-    log = log + "    [coarse] Recall = " + str(cls_scores_coarse['Recall']) + "\n"
+    # log = log + "    [coarse] Precision = " + str(cls_scores_coarse['Precision']) + "\n"
+    # log = log + "    [coarse] Recall = " + str(cls_scores_coarse['Recall']) + "\n"
     if seg_scores_fine:
         log = log + "    ------------------------------------ \n"
         log = log + "    [fine] F1 = " + str(cls_scores_fine['F1']) + "\n"
-        log = log + "    [fine] Precision = " + str(cls_scores_fine['Precision']) + "\n"
-        log = log + "    [fine] Recall = " + str(cls_scores_fine['Recall']) + "\n"
+        # log = log + "    [fine] Precision = " + str(cls_scores_fine['Precision']) + "\n"
+        # log = log + "    [fine] Recall = " + str(cls_scores_fine['Recall']) + "\n"
    
     log += "================================\n"
     print(log)

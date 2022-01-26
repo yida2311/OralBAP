@@ -34,20 +34,14 @@ class Config:
             "bapTA": {
                 "alpha": 1.0,
                 "beta": 1.0,
-                "gamma": 50.0,
-                "delta": 0.2,
+                "gamma": 1.0,
                 "w": 1.0,
-                "use_cons_loss": True,
-                "use_sim_loss": False,
-                "use_size_const": True,
+                "use_cls_loss": True,
+                "use_sim_cons_loss": False,
+                "use_feat_cons_loss": True,
                 "use_curriculum": True,
                 "use_sim_weight": True,
                 "cons_type": "mse", # ["mse", 'kl-div']
-                "aux_params":{
-                    "init_t": 5.0,
-                    "max_t": 10.0,
-                    "mulcoef": 1.01,
-                },
             },
         }
 
@@ -55,7 +49,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train-no_bank"
+            self.task_name += "-" + "train"
         else:
             self.task_name += "-" + "test"
 
@@ -109,14 +103,14 @@ class Config:
         self.batch_size = 12
         self.acc_step = 1
         self.ckpt_path = None
-        if train:
+        if not train:
             self.ckpt_path = 'results-v2/saved_models/bapnetTA-bapTA-[12-14-05]-train/bapnetTA-resnet34-best-fine.pth' # pretrained model
         self.num_workers = 4
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 
         # output config
-        out_root = "results-v2/"
+        out_root = "results-v3/"
         self.model_path = out_root + "saved_models/" + self.task_name
         self.log_path = out_root + "logs/" 
         self.writer_path = out_root + 'writers/' + self.task_name
