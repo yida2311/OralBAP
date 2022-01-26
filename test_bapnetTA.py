@@ -296,7 +296,8 @@ def similarity_map_analyze(cfg, device):
 
 
 if __name__ == '__main__':
-    from configs_test.config_baseline import Config
+    # from configs_test.config_baseline_cs import Config
+    from configs_test.config_baseline_mt_cs100 import Config
 
     cfg = Config(train=False)
     device = torch.device("cuda:0")

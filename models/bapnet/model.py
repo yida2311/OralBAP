@@ -125,7 +125,7 @@ class BAPnet(SegmentationModel):
         # filter out specific class label, if area < min_area
         label = torch.tensor(range(self.n_class), dtype=torch.long)
         label = label.repeat(n, 1).cuda()  # N x 4
-        area = torch.sum(mask, dim=(2,3)) # N x 4
+        area = torch.sum(mask, dim=(2,3)).float() # N x 4
         ratio = area / (h*w)
         label[ratio<self.min_ratio] = -1
         digit = digit.view(-1, c)
@@ -204,7 +204,7 @@ class BAPnet(SegmentationModel):
         threshs = torch.sum(bg_sim, dim=(1,2)) / (torch.sum(bg_mask, dim=(1,2))+1e-1)  # N
         thresh = threshs.mean()
         self.thresh = (1-self.momentum) * thresh + self.momentum * self.thresh
-        ratio = torch.sum(bg_mask, dim=(1,2)) / (H*W)
+        ratio = torch.sum(bg_mask, dim=(1,2)).float() / (H*W)
         threshs[ratio<self.min_ratio] = self.thresh
 
         noise_mask = (sim > threshs.unsqueeze(1).unsqueeze(2)) & fg_mask
