@@ -27,7 +27,7 @@ def main(cfg, device):
     if not os.path.exists(cfg.test_output_path): 
         os.makedirs(cfg.test_output_path)
 
-    ### MODEL INIT
+    ### MODEL INIT 
     model = Unet(classes=cfg.n_class, encoder_name=cfg.encoder, **cfg.model_cfg)
     model = model_load_state_dict(model, ckpt_path=cfg.ckpt_path)
     model.to(device)

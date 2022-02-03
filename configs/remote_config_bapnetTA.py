@@ -33,15 +33,15 @@ class Config:
         self.loss_cfg = {
             "bapTA": {
                 "alpha": 1.0,
-                "beta": 1.0,
+                "beta": 100.0,
                 "gamma": 1.0,
                 "w": 1.0,
                 "use_cls_loss": True,
-                "use_sim_cons_loss": False,
-                "use_feat_cons_loss": True,
+                "use_sim_cons_loss": True,
+                "use_feat_cons_loss": False,
                 "use_curriculum": True,
                 "use_sim_weight": True,
-                "cons_type": "mse", # ["mse", 'kl-div']
+                "cons_type": "kl", # ["mse", 'kl-div']
             },
         }
 
@@ -49,7 +49,7 @@ class Config:
         self.task_name = "-".join([self.model, self.loss, simple_time()])
         # self.task_name = "-".join([self.model, self.loss, '[11-05]'])
         if train:
-            self.task_name += "-" + "train"
+            self.task_name += "-" + "train-no-feat_cons"
         else:
             self.task_name += "-" + "test"
 
@@ -105,7 +105,7 @@ class Config:
         self.ckpt_path = None
         if not train:
             self.ckpt_path = 'results-v2/saved_models/bapnetTA-bapTA-[12-14-05]-train/bapnetTA-resnet34-best-fine.pth' # pretrained model
-        self.num_workers = 4
+        self.num_workers = 16
         self.evaluation = True  # evaluatie val set
         self.val_vis = True # val result visualization
 

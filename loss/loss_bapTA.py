@@ -44,6 +44,7 @@ class BapTALoss(nn.Module):
                 self.feat_cons_loss = kl_loss
         
         self.alpha = alpha
+        self.beta = beta
         self.gamma = gamma
         self.use_cls_loss = use_cls_loss
         self.use_sim_cons_loss = use_sim_cons_loss
@@ -71,19 +72,20 @@ class BapTALoss(nn.Module):
             loss_term["gt_seg_loss"] = gt_term.item()
             w = epoch/self.T*(1-self.w) + self.w
             loss =  w* loss + (1-w) * gt_term 
-
-        cls_term = self.cls_loss(cls_feat, cls_label)
-        loss_term["cls_loss"] = cls_term.item()
-        loss = loss + self.alpha * cls_term
+        
+        if self.use_cls_loss:
+            cls_term = self.cls_loss(cls_feat, cls_label)
+            loss_term["cls_loss"] = cls_term.item() * self.alpha
+            loss = loss + self.alpha * cls_term
 
         if self.use_sim_cons_loss:
             sim_cons_term = self.sim_cons_loss(sim_q, sim_k)
-            loss_term["sim_cons_loss"] = sim_cons_term.item()
+            loss_term["sim_cons_loss"] = sim_cons_term.item() * self.beta
             loss += self.beta * sim_cons_term
         
         if self.use_feat_cons_loss:
-            feat_cons_term = self.feat_cons_loss(sim_q, sim_k)
-            loss_term["feat_cons_loss"] = feat_cons_term.item()
+            feat_cons_term = self.feat_cons_loss(feat_q, feat_k)
+            loss_term["feat_cons_loss"] = feat_cons_term.item() * self.gamma
             loss += self.gamma * feat_cons_term
         
         return loss, loss_term
