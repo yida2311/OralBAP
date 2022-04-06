@@ -95,6 +95,7 @@ def main(cfg, device, local_rank=0):
     # loss_cfg = cfg.loss_cfg[cfg.loss]
     if cfg.loss == "bapTA":
         print("BAP Loss")
+        print(cfg.loss_cfg[cfg.loss])
         criterion = BapTALoss(**cfg.loss_cfg[cfg.loss])
     criterion = criterion.cuda()
     ### SOLVER
@@ -148,10 +149,10 @@ def main(cfg, device, local_rank=0):
             masks = masks.cuda()
             # train
             lr = scheduler(optimizer, i_batch, epoch)
-            # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
+            seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward(imgs, masks)
+            # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
             seg_preds = F.interpolate(seg_preds, size=(masks.size(1), masks.size(2)), mode='bilinear')
-            loss, loss_term = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k masks, epoch) 
+            loss, loss_term = criterion(seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k, masks, epoch) 
             
             # 
             for k, v in loss_term.items():
@@ -312,8 +313,8 @@ class SlideInference(object):
             with torch.no_grad():
                 imgs = imgs.cuda()
                 masks = masks.cuda()
-                # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k = model.forward(imgs, masks)
-                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
+                seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward(imgs, masks)
+                # seg_preds, seg_label, cls_preds, cls_label, sims_q, sims_k, feat_q, feat_k = model.forward_without_bank(imgs, masks)
                 seg_preds = F.interpolate(seg_preds, size=(imgs.size(2), imgs.size(3)), mode='bilinear')
                 seg_preds_np = seg_preds.cpu().detach().numpy()
             
@@ -415,7 +416,7 @@ if __name__ == '__main__':
     torch.backends.cudnn.benchmark = True
     os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
     os.environ['CUDA_DEVICE_ORDER'] = "PCI_BUS_ID"
-    os.environ['CUDA_VISIBLE_DEVICES'] = "4"
+    os.environ['CUDA_VISIBLE_DEVICES'] = "2"
     SEED = 552
     seed_everything(SEED)
 
