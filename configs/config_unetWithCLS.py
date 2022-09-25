@@ -14,6 +14,9 @@ class Config:
             'decoder_channels': (256, 128, 64, 64),
             'decoder_attention_type': 'scse',
             'in_channels': 3,
+            'aux_params': {
+                "min_ratio": 0.1,
+            },
         }
         self.train = train
 
